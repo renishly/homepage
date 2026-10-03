@@ -36,7 +36,7 @@
     </button>
 
     {% if online %}
-    <span class="badge badge-success badge-soft" title="Checked in on schedule ({{ agent | check_in_text }})">online</span>
+    <span class="live-dot badge badge-success badge-soft" title="Checked in on schedule ({{ agent | check_in_text }})">online</span>
     {% elif agent.last_seen %}
     <span class="badge badge-ghost" title="No check-in for longer than expected ({{ agent | check_in_text }})">offline</span>
     {% else %}

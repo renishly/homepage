@@ -55,6 +55,7 @@ Here's the flow:
 | `main.py` | All the routes (pages, dashboard, API). |
 | `db.py` | Database connection and the tables (`Agent`, `Folder`, `AgentFolderLink`, `Event`, `Command`, `Output`, `OutputFile`, `CategoryNotification`). |
 | `security.py` | The dashboard login check, CSRF protection, the per-agent API-key check, key encryption, and the agent editing password check. |
+| `static/theme.css` | The site's look: the "codepaper" theme (black IBM Plex Mono text on `#ffff83` yellow paper, cards with thin black borders and hard shadows, vibrant yellow `#ffe600` hovers, a tilted background grid that drifts and rushes forward on each page load) and all the animations (page transitions, a typed home title, pressing buttons, snapping pop-ups, sliding toasts, a pulsing "online" light). Change colours here: they're the variables at the top. Animations switch off for visitors who ask their device to reduce motion. |
 | `templates/` | The HTML pages (Jinja2). |
 | `templates/dashboard.html` | The grid page, with the folder sidebar and the Add Agent window. |
 | `templates/agent.html` | One agent's page. |

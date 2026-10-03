@@ -656,6 +656,19 @@ This was run when agents still identified themselves by `AGENT_NAME`.
 - **A scheduled "hourly" run:** a short script with alpha's key called `check_in(every=3600)`, sent an output, called `flush()` (0 waiting) and exited. The dashboard showed alpha as **online** with "checks in every 1 h", and the database recorded `check_in_seconds = 3600`.
 - **Robustness fix:** the connector now ignores a commands reply that isn't a list (e.g. a proxy's error page) instead of failing.
 
+## 3o. New look ("codepaper")
+
+**Result: PASSED**, checked in the browser at a wide window and at phone size, after one fix.
+
+- **Home:** yellow graph-paper page, the name "Ren" in IBM Plex Mono typing itself out with a blinking cursor, and a black "Open agent dashboard" button with yellow text.
+- **Dashboard:** same layout. See-through deep-yellow cards (`#fff466` at 55%, lightly blurred) with black borders and hard shadows that lift on hover; the folders sidebar the same `#ffff83` as the page, see-through (45%); Start in vibrant yellow and Pause in white; the active folder in black; the pulsing light on "online".
+- **Background grid:** squares turned 8° clockwise with a gentle 15° tilt, nearly flat, its near side towards a bearing of about 70° (east-north-east). It fades away on the opposite side and drifts along that bearing; the movement is set to stay on 70° despite the turn, and repeats seamlessly. Measured moving: it rushes in on page load, then drifts.
+- **Second bug found and fixed:** with yellow cards, the grid disappeared. daisyUI paints the page's root element in the card colour, so the body's own yellow background covered the grid. The paper is now painted on the root and the body is transparent, so the grid sits between them.
+- **Agent page:** same layout, with Controls still in the right-hand column. "// MONITOR", "// OUTPUTS", "// ACTIVITY" headings; the Monitor PDF works as before.
+- **Pop-ups:** Agent settings, the Filter panel and toasts all appeared correctly.
+- **Bug found and fixed:** the page-load animation left an invisible transform on each section, which trapped the settings window inside the header. The animation now leaves nothing behind (`animation-fill-mode: backwards`), and the window covers the screen again.
+- **Tests:** all 258 automated tests still pass; only appearance changed.
+
 ## 4. Known limitations and things not verified
 
 - **Render:** deployment was not tested. Only the user can do that, following the README. `render.yaml` parses as valid YAML and its field names were checked against Render's Blueprint reference, but Render itself has not validated it.

@@ -22,7 +22,7 @@
         <span class="badge badge-warning badge-sm shrink-0" title="Paused from the dashboard">paused</span>
         {% endif %}
         {% if cell.online %}
-        <span class="badge badge-success badge-soft badge-sm shrink-0" title="Checked in on schedule ({{ agent | check_in_text }})">online</span>
+        <span class="live-dot badge badge-success badge-soft badge-sm shrink-0" title="Checked in on schedule ({{ agent | check_in_text }})">online</span>
         {% elif agent.last_seen %}
         <span class="badge badge-ghost badge-sm shrink-0" title="No check-in for longer than expected ({{ agent | check_in_text }})">offline</span>
         {% else %}

@@ -1,0 +1,436 @@
+/* =============================================================================
+   The site's look: "codepaper"
+   Black monospace text on #ffff83 yellow paper, white cards with thin black
+   borders and hard square shadows, vibrant yellow (#ffe600) for hovers.
+   Inspired by code editors and wireframe drawings.
+
+   This file only changes how things look and move: colours, borders, fonts and
+   animations. The layout and behaviour come from the templates and stay as they are.
+   It's plain CSS, loaded after daisyUI (see templates/base.html).
+   ============================================================================= */
+
+/* --- Colours ----------------------------------------------------------------
+   daisyUI components read these variables, so changing them here recolours
+   every button, badge, card and alert. data-theme="codepaper" in base.html
+   switches this theme on. */
+[data-theme="codepaper"] {
+  color-scheme: light;
+
+  --ink: #111111;          /* text, borders, shadows */
+  --paper: #ffff83;        /* the main colour: the page itself */
+  --vivid: #ffe600;        /* vibrant yellow: hovers and highlights */
+  --sun: #ffc400;          /* a deeper yellow, for accents */
+
+  --color-base-100: #fff466;           /* cards and pop-ups: a slightly deeper yellow */
+  --color-base-200: var(--paper);      /* the page background */
+  --color-base-300: #e6d84a;           /* dividers and quiet fills */
+  --color-base-content: var(--ink);
+
+  --color-primary: var(--ink);         /* main buttons: black with yellow text */
+  --color-primary-content: var(--paper);
+  --color-secondary: var(--vivid);
+  --color-secondary-content: var(--ink);
+  --color-accent: var(--sun);
+  --color-accent-content: var(--ink);
+  --color-neutral: var(--ink);
+  --color-neutral-content: var(--paper);
+
+  --color-info: #2f5bff;
+  --color-info-content: #ffffff;
+  --color-success: #00a862;
+  --color-success-content: #ffffff;
+  --color-warning: #ff9500;
+  --color-warning-content: var(--ink);
+  --color-error: #e4223c;
+  --color-error-content: #ffffff;
+
+  /* Square corners, crisp 1px lines, no soft depth: the wireframe look. */
+  --radius-selector: 0;
+  --radius-field: 0;
+  --radius-box: 0;
+  --border: 1px;
+  --depth: 0;
+  --noise: 0;
+}
+
+/* --- Paper and type ---------------------------------------------------------- */
+
+/* The yellow paper is painted on the page's root (<html>), and the body itself
+   is see-through, so the moving grid (body::before, below) can sit between
+   the paper and the content. (daisyUI would otherwise paint the root in the
+   card colour, and the body's own background would cover the grid.) */
+html {
+  background-color: var(--paper);
+}
+body {
+  background-color: transparent;
+}
+
+/* The background grid: a sheet of graph paper with its squares turned 8
+   degrees clockwise, tilted so the side towards a bearing of about 70 degrees
+   (east-north-east) is nearest to you, and the opposite side fades away into
+   the distance. It drifts slowly along that bearing; on every page load it
+   first rushes for about a second, which emphasises each page change, then
+   settles into the slow drift. It sits behind everything (z-index -1) and
+   ignores clicks.
+   Reading the transform from right to left:
+     rotateZ(8deg)   turns the squares 8 degrees clockwise;
+     rotate3d(0.342, 0.940, 0, -15deg)
+                     tilts the sheet by 15 degrees around the line at right
+                     angles to the 70-degree bearing (cos 70, sin 70), bringing
+                     its 70-degree side towards you. A small tilt keeps the grid
+                     close and nearly flat;
+     perspective(1300px)  a far-away viewpoint, so squares don't look stretched.
+   The movement (grid-drift, grid-rush below) and the fade (mask-image) are
+   measured on the sheet, so they're set 8 degrees less (242 instead of 250)
+   to still point along the 70-degree bearing on screen. */
+body::before {
+  content: "";
+  position: fixed;
+  z-index: -1;
+  top: -60vh;
+  left: -60vw;
+  width: 220vw;
+  height: 220vh;
+  pointer-events: none;
+  background-image:
+    linear-gradient(to right, rgb(17 17 17 / 0.2) 1.5px, transparent 1.5px),
+    linear-gradient(to bottom, rgb(17 17 17 / 0.2) 1.5px, transparent 1.5px);
+  background-size: 52px 52px;
+  transform-origin: 50% 50%;
+  transform: perspective(1300px) rotate3d(0.342, 0.940, 0, -15deg) rotateZ(8deg);
+  /* Fade the grid out towards the far side (a bearing of 250 degrees on
+     screen, opposite the near side; 242 on the turned sheet), so it reads as
+     depth. CSS gradient angles work like bearings: 0deg is up, 90deg is right. */
+  mask-image: linear-gradient(242deg, black 30%, transparent 75%);
+  -webkit-mask-image: linear-gradient(242deg, black 30%, transparent 75%);
+  animation:
+    grid-rush 1.15s cubic-bezier(0.12, 0.85, 0.25, 1),
+    grid-drift 54s linear 1.15s infinite;
+}
+
+::selection {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+/* Section headings ("Controls", "Outputs"...) read like code comments. */
+h2.card-title,
+.modal-box h3 {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.95rem;
+}
+h2.card-title::before {
+  content: "// ";
+  opacity: 0.45;
+}
+
+/* A blinking cursor after each page's main heading. */
+main h1::after,
+.hero h1::after {
+  content: "_";
+  margin-left: 0.08em;
+  animation: cursor-blink 1.05s steps(1) infinite;
+}
+
+/* Inline code: black chips with yellow text, like a terminal. */
+code {
+  background: var(--ink);
+  color: var(--paper);
+  padding: 0.05em 0.35em;
+}
+pre code,
+code.block {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+}
+
+/* Badges: small, tight and technical. */
+.badge {
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  border-color: var(--ink);
+}
+
+/* Links: black text with a yellow highlighter underline (yellow text is unreadable here). */
+.link {
+  text-decoration: none;
+  background: linear-gradient(transparent 62%, var(--vivid) 62%);
+  transition: background-size 0.2s ease, color 0.2s ease;
+}
+.link:hover {
+  background: var(--vivid);
+}
+
+/* --- Cards, pop-ups and the sidebar: thin black lines, hard square shadows --- */
+
+/* Cards, pop-ups and the Filter panel are slightly see-through, so the moving
+   grid shows faintly behind them. (Only the background is see-through: text
+   and borders stay solid.) */
+.card:not(.border-dashed),
+.modal-box,
+.shadow-2xl.rounded-box {
+  background-color: rgb(255 244 102 / 0.55);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+/* The folders sidebar is the same yellow as the page, and see-through too. */
+.drawer-side aside {
+  background-color: rgb(255 255 131 / 0.45);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+
+.card,
+.modal-box,
+.drawer-side aside,
+.toast .alert {
+  border: 1.5px solid var(--ink);
+  box-shadow: 4px 4px 0 var(--ink);
+}
+.drawer-side aside {
+  box-shadow: none;
+  border-width: 0 1.5px 0 0;
+}
+/* The "Add Agent" card keeps its dashed outline. */
+.card.border-dashed {
+  border-style: dashed;
+  box-shadow: none;
+  background: rgb(255 255 255 / 0.35);
+}
+
+/* Cards you can click lift towards you. */
+.card {
+  transition: transform 0.16s ease, box-shadow 0.16s ease, background-color 0.16s ease;
+}
+.card.cursor-pointer:hover {
+  transform: translate(-2px, -2px);
+  box-shadow: 7px 7px 0 var(--ink);
+}
+.card.cursor-pointer:active {
+  transform: translate(2px, 2px);
+  box-shadow: 1px 1px 0 var(--ink);
+}
+.card.border-dashed:hover {
+  background: var(--vivid);
+  border-color: var(--ink);
+  color: var(--ink);
+}
+
+/* --- Buttons, fields and the menu ------------------------------------------- */
+
+.btn {
+  border-color: var(--ink);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  transition: transform 0.09s ease, box-shadow 0.09s ease, background-color 0.15s ease, color 0.15s ease;
+}
+/* Solid buttons get a small hard shadow and "press in" when clicked. */
+.btn:not(.btn-ghost):not(.btn-link):not(.join-item):not(.btn-circle):not(:disabled) {
+  box-shadow: 2px 2px 0 var(--ink);
+}
+.btn:not(:disabled):active {
+  transform: translate(2px, 2px) scale(0.98);
+  box-shadow: 0 0 0 var(--ink) !important;
+}
+/* Main (black) buttons turn vibrant yellow on hover. */
+.btn-primary:not(:disabled):hover,
+.btn-neutral:not(:disabled):hover {
+  background: var(--vivid);
+  color: var(--ink);
+}
+.btn-ghost:not(:disabled):hover {
+  background: var(--vivid);
+}
+/* Start is vibrant yellow and Pause is white (instead of green and orange), to
+   stay in the yellow-and-white palette; red is kept for Delete. */
+.btn-success {
+  --btn-color: var(--vivid);
+  --btn-fg: var(--ink);
+  background: var(--vivid);
+  color: var(--ink);
+}
+.btn-warning {
+  --btn-color: #ffffff;
+  --btn-fg: var(--ink);
+  background: #ffffff;
+  color: var(--ink);
+}
+.btn-success:not(:disabled):hover {
+  background: var(--sun);
+}
+.btn-warning:not(:disabled):hover {
+  background: var(--paper);
+}
+
+.input,
+.textarea,
+.select {
+  border: 1.5px solid var(--ink);
+  background: #ffffff;
+}
+.input:focus,
+.input:focus-within,
+.textarea:focus,
+.select:focus {
+  outline: 3px solid var(--vivid);
+  outline-offset: 1px;
+  border-color: var(--ink);
+}
+
+.menu li > a:hover {
+  background: var(--paper);
+}
+.menu li > a.menu-active,
+.menu li > a.menu-active:hover {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+/* --- Animations ---------------------------------------------------------------
+   Everything below moves; it's all switched off for people who've asked their
+   device to reduce motion (see the end of this file). */
+
+/* Moving between pages: the old page lifts away, the new one wipes in from the
+   top like a terminal printing it. Uses the browser's View Transitions; browsers
+   without them simply switch pages as before. */
+@view-transition {
+  navigation: auto;
+}
+::view-transition-old(root) {
+  animation: page-out 0.22s ease-in both;
+}
+::view-transition-new(root) {
+  animation: page-in 0.42s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+/* Each page's sections arrive one after another when it loads.
+   "backwards" applies the starting state only *before* the animation; once it
+   has finished, nothing is left on the element. That matters: a leftover
+   transform would trap pop-up windows inside that section. */
+main > * {
+  animation: rise-in 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+}
+main > *:nth-child(2) { animation-delay: 0.06s; }
+main > *:nth-child(3) { animation-delay: 0.12s; }
+main > *:nth-child(4) { animation-delay: 0.18s; }
+main > *:nth-child(5) { animation-delay: 0.24s; }
+
+/* The home page's name types itself out, then the rest fades in. */
+.hero h1 {
+  animation: type-in 0.9s steps(14, end) both;
+}
+.hero p,
+.hero .btn,
+.hero .badge {
+  animation: rise-in 0.5s 0.75s cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+}
+
+/* Pop-up windows snap open. */
+.modal.modal-open .modal-box {
+  animation: pop-in 0.26s cubic-bezier(0.2, 0.9, 0.3, 1.25) both;
+}
+.modal.modal-open {
+  backdrop-filter: blur(2px);
+}
+
+/* Toast messages slide in from the right, then fade out before they disappear (after 3 s). */
+.toast .alert {
+  animation:
+    toast-in 0.32s cubic-bezier(0.2, 0.9, 0.3, 1.25) both,
+    toast-out 0.3s ease-in 2.7s forwards;
+}
+
+/* Toast colours follow the palette: success is vibrant yellow, warnings white. */
+.toast .alert-success {
+  background: var(--vivid);
+  color: var(--ink);
+}
+.toast .alert-warning {
+  background: #ffffff;
+  color: var(--ink);
+}
+
+/* "online" badges carry a small pulsing light. */
+.live-dot::before {
+  content: "";
+  display: inline-block;
+  width: 0.5em;
+  height: 0.5em;
+  margin-right: 0.35em;
+  background: currentColor;
+  animation: live-pulse 1.6s ease-in-out infinite;
+}
+
+/* The Outputs Filter panel and other dropdowns get a hard shadow too. */
+.shadow-2xl.rounded-box {
+  border: 1.5px solid var(--ink) !important;
+  box-shadow: 5px 5px 0 var(--ink) !important;
+}
+
+/* The grid moves along the 70-degree bearing on screen, from the near side
+   towards the far side. On the sheet (turned 8 degrees) that's 15 squares
+   across for every 8 down (52px squares; tan 62 is about 15/8), and whole
+   squares make the pattern repeat seamlessly. 54s keeps the same gentle speed. */
+@keyframes grid-drift {
+  from { background-position: 0 0; }
+  to { background-position: -780px 416px; }
+}
+@keyframes grid-rush {
+  from { background-position: 2340px -1248px; }  /* about 51 squares in about a second */
+  to { background-position: 0 0; }
+}
+@keyframes cursor-blink {
+  50% { opacity: 0; }
+}
+@keyframes page-out {
+  to { opacity: 0; transform: translateY(-10px); filter: blur(2px); }
+}
+@keyframes page-in {
+  from { opacity: 0; clip-path: inset(0 0 100% 0); }
+  to { opacity: 1; clip-path: inset(0 0 0 0); }
+}
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes type-in {
+  from { clip-path: inset(0 100% 0 0); }
+  to { clip-path: inset(0 0 0 0); }
+}
+@keyframes pop-in {
+  from { opacity: 0; transform: translate(6px, 10px) scale(0.96); box-shadow: 0 0 0 var(--ink); }
+  to { opacity: 1; transform: none; box-shadow: 4px 4px 0 var(--ink); }
+}
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(110%); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes toast-out {
+  to { opacity: 0; transform: translateX(30%); }
+}
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.7); }
+}
+
+/* --- Reduced motion ------------------------------------------------------------ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-delay: 0s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation: none !important;
+  }
+  body::before {
+    animation: none !important;  /* the grid stays tilted, but still */
+  }
+}

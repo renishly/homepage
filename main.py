@@ -18,7 +18,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request,
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlmodel import Session, func, select
 
 # Importing db also loads your .env file (see the top of db.py).
@@ -53,9 +53,15 @@ from security import (
 BASE_DIR = Path(__file__).resolve().parent
 
 CELLS_PER_PAGE = 9  # a 3 x 3 grid (agent cards plus the "Add Agent" card)
-# An agent counts as "online" if it contacted the API this recently.
-# The example agent checks in every 3 seconds, so 15 seconds leaves room for hiccups.
-ONLINE_WINDOW = timedelta(seconds=15)
+# "Online" follows each agent's own rhythm: an agent says how often it checks
+# in (check_in_every, from MIN_CHECK_IN to MAX_CHECK_IN seconds), and counts as
+# online until that time has passed, plus some slack: half the interval, and at
+# least CHECK_IN_SLACK, so one slow check-in doesn't flip it to offline.
+# Agents that never say assume DEFAULT_CHECK_IN.
+DEFAULT_CHECK_IN = 60
+MIN_CHECK_IN = 1
+MAX_CHECK_IN = 7 * 24 * 60 * 60  # a week
+CHECK_IN_SLACK = 30
 MAX_AGENT_NAME = 50
 MAX_FOLDER_NAME = 40
 MIN_API_KEY_LENGTH = 20
@@ -84,6 +90,8 @@ app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 # Lets dashboard templates write {{ csrf_token() }} (see security.py).
 templates.env.globals["csrf_token"] = csrf_token
+# Lets templates write {{ agent | check_in_text }}, e.g. "every 5 min".
+templates.env.filters["check_in_text"] = lambda agent: "every " + human_interval(check_in_interval(agent))
 
 
 # ---------------------------------------------------------------------------
@@ -91,15 +99,37 @@ templates.env.globals["csrf_token"] = csrf_token
 # ---------------------------------------------------------------------------
 
 
+def check_in_interval(agent: Agent) -> int:
+    """How often (seconds) the agent says it checks in, or the default."""
+    return agent.check_in_seconds or DEFAULT_CHECK_IN
+
+
 def is_online(agent: Agent) -> bool:
-    """True if the agent has contacted the API in the last few seconds."""
+    """True if the agent has checked in as often as it said it would.
+
+    E.g. an agent that checks in every 5 seconds is online if it was seen in
+    the last 35 seconds; an hourly one, if it was seen in the last 90 minutes.
+    """
     if agent.last_seen is None:  # never connected
         return False
     last_seen = agent.last_seen
     # SQLite forgets the time zone when it saves a date; we always store UTC.
     if last_seen.tzinfo is None:
         last_seen = last_seen.replace(tzinfo=timezone.utc)
-    return utc_now() - last_seen < ONLINE_WINDOW
+    interval = check_in_interval(agent)
+    allowed = timedelta(seconds=interval + max(CHECK_IN_SLACK, interval / 2))
+    return utc_now() - last_seen <= allowed
+
+
+def human_interval(seconds: int | None) -> str:
+    """A check-in interval in words: "3 s", "5 min", "1 h 30 min", "1 day"."""
+    seconds = int(seconds or DEFAULT_CHECK_IN)
+    days, rest = divmod(seconds, 86400)
+    hours, rest = divmod(rest, 3600)
+    minutes, secs = divmod(rest, 60)
+    parts = [f"{days} day{'s' if days != 1 else ''}" if days else "",
+             f"{hours} h" if hours else "", f"{minutes} min" if minutes else "", f"{secs} s" if secs else ""]
+    return " ".join(part for part in parts if part)
 
 
 def latest_event(session: Session, agent_id: int) -> Event | None:
@@ -1414,9 +1444,11 @@ def create_event(
 
 
 class StateIn(BaseModel):
-    """What the connector sends when it checks in."""
+    """What the connector sends when it checks in. Leave a field out to keep it as it is."""
 
-    accepts_messages: bool | None = None  # None: leave as it is
+    accepts_messages: bool | None = None
+    # How often this agent checks in, in seconds (1 second to 1 week).
+    check_in_every: int | None = Field(default=None, ge=MIN_CHECK_IN, le=MAX_CHECK_IN)
 
 
 @app.post("/api/state")
@@ -1425,17 +1457,29 @@ def agent_state(
     agent: Agent = Depends(require_agent),
     session: Session = Depends(get_session),
 ) -> dict:
-    """The connector's regular check-in (every few seconds).
+    """An agent's check-in, as often as the agent itself decides.
 
-    The agent says whether it accepts messages, and learns whether it's paused.
-    (Checking in also keeps its card "online".)
+    The agent can say how often it checks in (so the dashboard knows when to
+    show it as offline) and whether it accepts messages, and it learns whether
+    it's paused. Any API call marks the agent as seen; this is the one meant
+    for checking in.
     """
+    changed = False
     if state_in.accepts_messages is not None and agent.accepts_messages != state_in.accepts_messages:
         agent.accepts_messages = state_in.accepts_messages
+        changed = True
+    if state_in.check_in_every is not None and agent.check_in_seconds != state_in.check_in_every:
+        agent.check_in_seconds = state_in.check_in_every
+        changed = True
+    if changed:
         session.add(agent)
         session.commit()
         session.refresh(agent)
-    return {"paused": agent.paused, "accepts_messages": agent.accepts_messages}
+    return {
+        "paused": agent.paused,
+        "accepts_messages": agent.accepts_messages,
+        "check_in_every": check_in_interval(agent),
+    }
 
 
 @app.get("/api/commands")

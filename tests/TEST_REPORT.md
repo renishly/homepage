@@ -121,6 +121,15 @@ Date: 2026-10-02 · Python 3.12.3 · macOS (Darwin 23.1.0)
 | `test_connector_start_pause_commands_update_state` | A Start/Pause command received by the connector updates `is_paused()` straight away and still reaches `on_command`. |
 | `test_connector_accept_messages` | `accept_messages()` sends the "I accept messages" check-in, and messages arrive at its handler as text (not at `on_command`). |
 | `test_messages_go_to_on_command_without_accept_messages` | Without a message handler, messages still reach `on_command`, as before. |
+| `test_agent_declares_its_check_in_interval` | An agent's check-in can declare how often it checks in; the agent page shows it ("checks in every 1 h"). |
+| `test_check_in_interval_must_be_sensible[...]` | Intervals under 1 second, over a week, or not a number are refused (422). |
+| `test_online_follows_the_agents_own_rhythm[...]` | "Online" uses each agent's own interval plus slack: default 60 s, every 5 s, hourly and daily agents are each online or offline at the right times. |
+| `test_check_in_interval_wording` | Intervals read naturally ("5 min", "1 h 30 min", "2 days"); undeclared ones show "(default)". |
+| `test_missing_columns_are_added_to_an_existing_database` | A database made by an older version gets newly added columns at startup, keeping existing rows with sensible defaults; running it again changes nothing. |
+| `test_connector_check_in_declares_interval_and_handles_commands` | `check_in(every=3600)` sends the interval, then picks up waiting commands. |
+| `test_connector_check_in_without_handlers_only_checks_in` | Without handlers, `check_in()` only checks in and learns the pause state. |
+| `test_connector_start_check_ins_runs_in_background` | `start_check_ins(every)` checks in in the background, declaring the interval. |
+| `test_connector_out_of_range_interval_is_clamped_not_an_error` | An interval out of range is brought into range with a warning, never an error. |
 | `test_output_keeps_its_original_time` | An output sent with an earlier `created_at` keeps that time, sits at its real place in the list, and its Activity line says "(delivered late)". |
 | `test_future_times_become_now` | A `created_at` in the future (a wrong clock) is treated as now. |
 | `test_late_file_output_and_report` | File outputs and reports also keep their original times; an unreadable time is refused (422). |
@@ -347,6 +356,25 @@ tests/test_app.py::test_pause_and_start_switch_the_paused_state PASSED
 tests/test_app.py::test_check_in_keeps_agent_online PASSED
 tests/test_app.py::test_messages_are_off_until_the_agent_accepts_them PASSED
 tests/test_app.py::test_messages_ready_check PASSED
+tests/test_app.py::test_agent_declares_its_check_in_interval PASSED
+tests/test_app.py::test_check_in_interval_must_be_sensible[0] PASSED
+tests/test_app.py::test_check_in_interval_must_be_sensible[-5] PASSED
+tests/test_app.py::test_check_in_interval_must_be_sensible[604801] PASSED
+tests/test_app.py::test_check_in_interval_must_be_sensible[often] PASSED
+tests/test_app.py::test_online_follows_the_agents_own_rhythm[None-seen0-True] PASSED
+tests/test_app.py::test_online_follows_the_agents_own_rhythm[None-seen1-False] PASSED
+tests/test_app.py::test_online_follows_the_agents_own_rhythm[5-seen2-True] PASSED
+tests/test_app.py::test_online_follows_the_agents_own_rhythm[5-seen3-False] PASSED
+tests/test_app.py::test_online_follows_the_agents_own_rhythm[3600-seen4-True] PASSED
+tests/test_app.py::test_online_follows_the_agents_own_rhythm[3600-seen5-False] PASSED
+tests/test_app.py::test_online_follows_the_agents_own_rhythm[86400-seen6-True] PASSED
+tests/test_app.py::test_online_follows_the_agents_own_rhythm[86400-seen7-False] PASSED
+tests/test_app.py::test_check_in_interval_wording PASSED
+tests/test_app.py::test_missing_columns_are_added_to_an_existing_database PASSED
+tests/test_app.py::test_connector_check_in_declares_interval_and_handles_commands PASSED
+tests/test_app.py::test_connector_check_in_without_handlers_only_checks_in PASSED
+tests/test_app.py::test_connector_start_check_ins_runs_in_background PASSED
+tests/test_app.py::test_connector_out_of_range_interval_is_clamped_not_an_error PASSED
 tests/test_app.py::test_output_keeps_its_original_time PASSED
 tests/test_app.py::test_future_times_become_now PASSED
 tests/test_app.py::test_late_file_output_and_report PASSED
@@ -393,7 +421,7 @@ tests/test_app.py::test_database_url_conversion[postgres://u:p@host:5432/db-post
 tests/test_app.py::test_database_url_conversion[postgresql://u:p@host:5432/db-postgresql+psycopg://u:p@host:5432/db] PASSED
 tests/test_app.py::test_database_url_conversion[postgresql+psycopg://u:p@host/db-postgresql+psycopg://u:p@host/db] PASSED
 tests/test_app.py::test_database_url_conversion[sqlite:///./local.db-sqlite:///./local.db] PASSED
-======================= 239 passed, 1 warning in 17.03s ========================
+======================= 258 passed, 1 warning in 19.92s ========================
 ```
 
 The one warning comes from Starlette and says its test client will move from `httpx` to a package called `httpx2`. It doesn't affect any results. Silencing it would mean installing a package that isn't on the allowed-dependency list, so it was left alone.
@@ -620,6 +648,14 @@ This was run when agents still identified themselves by `AGENT_NAME`.
   - `render.yaml` and `.env.example` list every secret.
   - Nothing secret or temporary would be committed (`.env`, `local.db` and buffer folders are ignored).
 
+## 3n. Agent-defined check-ins
+
+**Result: PASSED.**
+
+- **Database upgrade step:** the local demo server restarted with the new code and printed "Database: added the new column agent.check_in_seconds". The new add-missing-columns step upgraded an existing database in place, as it will on the live Supabase database.
+- **A scheduled "hourly" run:** a short script with alpha's key called `check_in(every=3600)`, sent an output, called `flush()` (0 waiting) and exited. The dashboard showed alpha as **online** with "checks in every 1 h", and the database recorded `check_in_seconds = 3600`.
+- **Robustness fix:** the connector now ignores a commands reply that isn't a list (e.g. a proxy's error page) instead of failing.
+
 ## 4. Known limitations and things not verified
 
 - **Render:** deployment was not tested. Only the user can do that, following the README. `render.yaml` parses as valid YAML and its field names were checked against Render's Blueprint reference, but Render itself has not validated it.
@@ -637,6 +673,7 @@ This was run when agents still identified themselves by `AGENT_NAME`.
 - **Monitor refresh:** the Monitor checks for changes every 10 seconds, so a new PDF or link can take up to 10 seconds to appear.
 - **PDFs on phones:** some mobile browsers (notably iPhone Safari) only show the first page of a PDF inside a page; **Open ↗** shows the whole document.
 - **Only the latest monitor is kept:** older monitor PDFs are deleted when replaced. For a history, also send them with `output()`.
+- **Reaction time depends on each agent's rhythm:** Start, Pause and messages reach an agent at its next check-in, so an hourly agent reacts within the hour (`wait_if_paused()` checks every few seconds while waiting, though).
 - **Pausing the work is up to the agent:** Pause always holds outputs and monitor updates. Stopping the agent's *work* needs `wait_if_paused()` in its loop, since the dashboard can't safely stop a program it doesn't control.
 - **"Accepts messages" lasts until changed:** if an agent stops, its message box stays on, and messages wait until it's back. The agent switches it off only by checking in with `accepts_messages: false`, e.g. after restarting without `accept_messages()`.
 - **Offline buffer scope:** it protects against the *dashboard* being unreachable. It can't help if the agent's own computer is off, or with Start/Pause/messages, which need the dashboard to be up when sent.

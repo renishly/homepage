@@ -41,7 +41,7 @@ Read the values from the environment variables `DASHBOARD_URL` and `DASHBOARD_AP
 | `PATCH /api/commands/{id}` | `{"status": "done"}` | `200`, or `404` if the command doesn't belong to this agent |
 | `POST /api/outputs` | `{"category": "articles", "content": <text, number, link, list or dict>}` | `201` |
 | `POST /api/outputs/file` | multipart form: `category` (text) and `file` (the file, max 5 MB) | `201`, or `413` if too big |
-| `POST /api/state` | `{"accepts_messages": true or false}` | `200` with `{"paused": true/false, "accepts_messages": ...}` |
+| `POST /api/state` | `{"check_in_every": <seconds>, "accepts_messages": true or false}`; both optional | `200` with `{"paused": true/false, "accepts_messages": ..., "check_in_every": <seconds>}` |
 | `PUT /api/monitor` | `{"url": "https://...", "label": "Results sheet"}`, or `{"url": null}` to remove it | `200` with `{"url", "label", "applied"}` |
 | `POST /api/monitor/file` | multipart form: `file` (a PDF, max 5 MB) and optional `label` | `200` with `{"filename", "label", "applied"}`, `413` if too big, `422` if not a PDF |
 
@@ -91,12 +91,17 @@ The dashboard can be unreachable for a while: no internet, a redeploy, a sleepin
 
 ## Start, Pause and messages
 
-- **Check in every 3 seconds or so** with `POST /api/state`, in the background. The reply says whether the dashboard has the agent **paused** (from its Start/Pause buttons). Checking in also keeps the agent shown as online.
+- **Check in at a rhythm that suits this agent**, with `POST /api/state`, sending `check_in_every`: how many seconds until the next check-in (1 to 604800, i.e. a week). The dashboard shows the agent as **online** while it keeps to that rhythm, plus half an interval of slack (at least 30 seconds). Without `check_in_every`, it expects a check-in every 60 seconds.
+  - **An agent that runs all the time:** check in in the background every few seconds to minutes. Shorter means Start/Pause and messages reach it faster.
+  - **An agent that runs on a schedule** (hourly, daily, as a cron job or cloud function): check in once at the start of each run, with `check_in_every` set to the schedule, e.g. `3600` for hourly. It then stays "online" between runs.
+  - Ask me which kind this agent is if it isn't obvious from the code.
+- **Each check-in also handles waiting commands:** after `POST /api/state`, `GET /api/commands` and handle them (see the listener below). The `POST /api/state` reply says whether the dashboard has the agent **paused** (from its Start/Pause buttons).
+- Provide `check_in(every=None)` (one check-in now, remembering `every`) and `start_check_ins(every)` (background check-ins at that rhythm), so the agent's own code decides.
 - **While paused, hold outputs and monitor updates.** Put them in the offline buffer without sending, and send them, in order and with their original times, as soon as a check-in says the agent isn't paused. Status reports (`report()`) still go through, so errors stay visible.
-- **Provide `wait_if_paused()`** (waits while paused) and `is_paused()`. Call `wait_if_paused()` at safe points in the agent's main loop, such as before starting the next task, so Pause also stops the work.
+- **Provide `wait_if_paused()`** (waits while paused, checking in every few seconds meanwhile to notice Start) and `is_paused()`. Call `wait_if_paused()` at safe points in the agent's main loop, such as before starting the next task, so Pause also stops the work.
 - A `start`/`pause` command arriving through `GET /api/commands` should update the pause state straight away, too.
 - **Messages are opt-in.** The dashboard keeps its message box switched off until the agent says it accepts messages, by sending `"accepts_messages": true` in its check-ins.
-  - Provide `accept_messages(on_message)`. It registers a handler that receives each message's text, and turns that flag on.
+  - Provide `accept_messages(on_message)`. It registers a handler that receives each message's text, turns that flag on, and checks in straight away so the box switches on. Messages then arrive at the agent's check-ins.
   - Only call it if this agent can do something useful with free-text messages, for example pass them to its LLM as an instruction. Ask me if you're unsure.
   - Send `"accepts_messages": false` (or never call it) otherwise.
 
@@ -116,12 +121,13 @@ The dashboard can be unreachable for a while: no internet, a redeploy, a sleepin
    - Ask me if you're not sure which to use.
 3. **A `report(message, type="log", data=None)` helper** that sends an event (status lines for the activity log).
    - It must **never raise or crash the agent**: catch network errors and print a one-line warning with a helpful hint (`401`: check the key; `404`: check the address; timeout: the site may be waking up).
-4. **A background command listener.**
-   - Every 3 seconds, `GET /api/commands`. For each command, call a handler, then `PATCH` it to `done`.
+4. **Command handling at each check-in.**
+   - At each check-in, `GET /api/commands`. For each command, call a handler, then `PATCH` it to `done`.
    - Route `message` commands to the `accept_messages` handler, passing the text. Route `start`/`pause` to an optional `on_command` handler, after updating the pause state.
    - Do this even if the handler fails; report the failure as an `"error"` event.
    - A command that isn't marked `done` (e.g. the `PATCH` failed) is delivered again on the next check, so handling the same command twice must be harmless.
-   - Run it in the background (a thread, async task, or whatever suits this codebase) so it **never blocks the agent's main work**.
+   - For background check-ins, run them in a thread, async task, or whatever suits this codebase, so they **never block the agent's main work**.
+   - If the reply isn't a list of commands, ignore it.
 5. **Wire up Start/Pause and messages** as described in "Start, Pause and messages" above:
    - call `wait_if_paused()` at the agent's safe points;
    - report `"Paused"` / `"Started"` as `"status"` events when the state changes;

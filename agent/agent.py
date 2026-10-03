@@ -41,7 +41,14 @@ os.environ.setdefault("DASHBOARD_URL", "http://127.0.0.1:8000")
 # Use the connector file from this project's connector/ folder.
 sys.path.insert(0, str(APP_DIR / "connector"))
 import dashboard_connector  # noqa: E402
-from dashboard_connector import accept_messages, listen, output, report, wait_if_paused  # noqa: E402
+from dashboard_connector import (  # noqa: E402
+    accept_messages,
+    listen,
+    output,
+    report,
+    start_check_ins,
+    wait_if_paused,
+)
 
 
 # ===========================================================================
@@ -81,6 +88,9 @@ def main() -> None:
     print(f"Agent connecting to {dashboard_connector.DASHBOARD_URL} (Ctrl+C to stop)")
     listen(handle)
     accept_messages(handle_message)  # switches on the dashboard's message box
+    # This demo runs all the time, so it checks in in the background. Every 5
+    # seconds keeps Start/Pause and messages quick; a real agent might use 30-300.
+    start_check_ins(every=5)
     report("Agent online", "status")
     output("https://github.com/", "links")  # an example link output
 

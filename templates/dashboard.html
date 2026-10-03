@@ -173,7 +173,8 @@
         <li>From then on the agent <strong>reports its activity and outputs</strong> to its card and activity log, and checks every few seconds for your <strong>Start</strong>, <strong>Pause</strong> and messages.</li>
       </ol>
       <ul class="list-disc space-y-1 pl-5 text-sm text-base-content/70">
-        <li><em>Online</em> means the agent checked in within the last 15 seconds.</li>
+        <li><em>Online</em> means the agent is checking in as often as it said it would. Each agent sets its own rhythm, from every few seconds to hourly or daily. Hover over a badge to see it.</li>
+        <li>Start, Pause and messages reach an agent at its next check-in.</li>
         <li>Folders group agents. Tag an agent from its page.</li>
         <li>Viewing or replacing a key, and deleting an agent, need the agent editing password.</li>
       </ul>
@@ -220,7 +221,7 @@
         <ol class="list-decimal space-y-1 pl-5 text-sm">
           <li>Download the file and put it next to your agent's code. It needs <code>requests</code> (<code>pip install requests</code>).</li>
           <li>Fill in the two values marked <strong>REPLACE THIS PLACEHOLDER</strong> near the top, or set them as environment variables instead: <code>DASHBOARD_URL</code> (this dashboard's address) and <code>DASHBOARD_API_KEY</code> (from <strong>Add Agent</strong>).</li>
-          <li>In your agent, use <code>report("...")</code> to send updates and <code>listen(on_command)</code> to receive Start, Pause and messages.</li>
+          <li>In your agent, use <code>output(...)</code> to send results, and check in at a rhythm that suits it: <code>start_check_ins(every=30)</code> for an agent that runs all the time, or <code>check_in(every=3600)</code> at the start of each run for a scheduled one. The file's QUICK START shows everything.</li>
         </ol>
         <pre class="max-h-72 overflow-auto rounded bg-base-200 p-3 text-xs"><code>{{ connector_code }}</code></pre>
       </div>

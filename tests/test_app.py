@@ -6,12 +6,13 @@ import json
 import re
 import tempfile
 import threading
+import time
 from datetime import date, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
-from sqlmodel import select
+from sqlmodel import SQLModel, select
 
 from conftest import TEST_AUTH, TEST_EDIT_PASSWORD
 from db import (
@@ -1306,6 +1307,132 @@ def test_messages_ready_check(client, session):
     assert client.get(url, params={"ready": "true"}).status_code == 401
 
 
+# --- Agent-defined check-ins ------------------------------------------------------
+
+
+def seen_ago(session, agent_id, **ago):
+    agent = session.get(Agent, agent_id)
+    agent.last_seen = utc_now() - timedelta(**ago)
+    session.add(agent)
+    session.commit()
+
+
+def test_agent_declares_its_check_in_interval(client, session):
+    agent_id = add_agent(client, session)
+    reply = client.post("/api/state", json={"check_in_every": 3600}, headers=headers_for("agent-1")).json()
+    assert reply["check_in_every"] == 3600
+    page_html = client.get(f"/dashboard/agents/{agent_id}", auth=TEST_AUTH).text
+    assert "checks in every 1 h" in page_html
+
+
+@pytest.mark.parametrize("every", [0, -5, 7 * 24 * 3600 + 1, "often"])
+def test_check_in_interval_must_be_sensible(client, session, every):
+    add_agent(client, session)
+    response = client.post("/api/state", json={"check_in_every": every}, headers=headers_for("agent-1"))
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize(
+    "every, seen, online",
+    [
+        (None, {"seconds": 80}, True),      # default: expected every 60 s (+30 s slack)
+        (None, {"seconds": 100}, False),
+        (5, {"seconds": 30}, True),         # every 5 s: 5 + 30 s slack
+        (5, {"seconds": 40}, False),
+        (3600, {"minutes": 80}, True),      # hourly: 1 h + 30 min slack
+        (3600, {"minutes": 100}, False),
+        (86400, {"hours": 30}, True),       # daily: 1 day + 12 h slack
+        (86400, {"hours": 40}, False),
+    ],
+)
+def test_online_follows_the_agents_own_rhythm(client, session, every, seen, online):
+    agent_id = add_agent(client, session)
+    if every:
+        client.post("/api/state", json={"check_in_every": every}, headers=headers_for("agent-1"))
+    seen_ago(session, agent_id, **seen)
+    page_html = grid(client)
+    assert (">online<" in page_html) is online
+    assert (">offline<" in page_html) is not online
+
+
+def test_check_in_interval_wording(client, session):
+    from main import human_interval
+
+    assert [human_interval(s) for s in (3, 60, 300, 3600, 5400, 86400, 172800)] == [
+        "3 s", "1 min", "5 min", "1 h", "1 h 30 min", "1 day", "2 days"
+    ]
+    agent_id = add_agent(client, session)
+    page_html = client.get(f"/dashboard/agents/{agent_id}", auth=TEST_AUTH).text
+    assert "checks in every 1 min (default)" in page_html
+
+
+def test_missing_columns_are_added_to_an_existing_database(tmp_path, monkeypatch):
+    """A live database made by an older version gets new columns, keeping its rows."""
+    import db
+    from sqlmodel import create_engine as make_engine
+    from sqlalchemy import inspect as inspect_db, text as sql
+
+    old_engine = make_engine(f"sqlite:///{tmp_path / 'old.db'}")
+    SQLModel.metadata.create_all(old_engine)
+    with old_engine.begin() as connection:  # pretend it predates two newer columns
+        connection.execute(sql('ALTER TABLE agent DROP COLUMN check_in_seconds'))
+        connection.execute(sql('ALTER TABLE agent DROP COLUMN paused'))
+        connection.execute(sql("INSERT INTO agent (name, api_key_hash, created_at, pinned_monitor, accepts_messages) "
+                               "VALUES ('old agent', 'hash', '2026-01-01', 0, 0)"))
+    monkeypatch.setattr(db, "engine", old_engine)
+    db.create_db_and_tables()
+    columns = {c["name"] for c in inspect_db(old_engine).get_columns("agent")}
+    assert {"check_in_seconds", "paused"} <= columns
+    with old_engine.connect() as connection:
+        row = connection.execute(sql("SELECT name, paused, check_in_seconds FROM agent")).one()
+    assert tuple(row) == ("old agent", 0, None)  # existing row kept, with the defaults
+    db.create_db_and_tables()  # running it again changes nothing
+
+
+# --- The connector: agent-defined check-ins ---------------------------------------
+
+
+def test_connector_check_in_declares_interval_and_handles_commands(monkeypatch, fake_site, tmp_path):
+    connector = load_connector(monkeypatch, fake_site["url"], "agent-key-0123456789", tmp_path)
+    dashboard_says(fake_site, paused=False)
+    seen = []
+    connector._command_handler = seen.append  # as listen(on_command) would set
+    assert connector.check_in(every=3600) is True  # e.g. an hourly agent, at the start of a run
+    state, commands = fake_site["requests"][:2]
+    assert (state["method"], state["path"]) == ("POST", "/api/state")
+    assert json_body(state)["check_in_every"] == 3600
+    assert (commands["method"], commands["path"]) == ("GET", "/api/commands")  # picks up waiting commands
+
+
+def test_connector_check_in_without_handlers_only_checks_in(monkeypatch, fake_site, tmp_path):
+    connector = load_connector(monkeypatch, fake_site["url"], "agent-key-0123456789", tmp_path)
+    dashboard_says(fake_site, paused=True)
+    assert connector.check_in() is True and connector.is_paused()
+    assert sent_paths(fake_site) == [("POST", "/api/state")]
+    assert "check_in_every" not in json_body(fake_site["requests"][0])  # nothing declared yet
+
+
+def test_connector_start_check_ins_runs_in_background(monkeypatch, fake_site, tmp_path):
+    connector = load_connector(monkeypatch, fake_site["url"], "agent-key-0123456789", tmp_path)
+    dashboard_says(fake_site, paused=False)
+    connector.start_check_ins(every=3600)  # the first check-in happens right away
+    for _ in range(50):
+        if fake_site["requests"]:
+            break
+        time.sleep(0.05)
+    assert json_body(fake_site["requests"][0])["check_in_every"] == 3600
+
+
+def test_connector_out_of_range_interval_is_clamped_not_an_error(monkeypatch, fake_site, tmp_path, capsys):
+    connector = load_connector(monkeypatch, fake_site["url"], "agent-key-0123456789", tmp_path)
+    dashboard_says(fake_site, paused=False)
+    assert connector.check_in(every=0) is True
+    assert json_body(fake_site["requests"][0])["check_in_every"] == 1
+    connector.check_in(every=10**9)
+    assert json_body(fake_site["requests"][1])["check_in_every"] == 7 * 24 * 3600
+    assert "out of range" in capsys.readouterr().out
+
+
 # --- Late arrivals (from the connector's offline buffer) ------------------------
 
 
@@ -1394,8 +1521,6 @@ def load_connector(monkeypatch, url=None, key=None, buffer_dir=None):
     Each copy gets its own empty offline-buffer folder, unless one is given.
     """
     monkeypatch.setenv("DASHBOARD_BUFFER_DIR", str(buffer_dir or tempfile.mkdtemp()))
-    # No automatic background check-ins in tests: they'd add requests at random moments.
-    monkeypatch.setenv("DASHBOARD_CHECK_IN_SECONDS", "0")
     for name, value in [("DASHBOARD_URL", url), ("DASHBOARD_API_KEY", key)]:
         if value is None:
             monkeypatch.delenv(name, raising=False)
@@ -1740,7 +1865,6 @@ def test_connector_accept_messages(monkeypatch, fake_site, tmp_path):
     connector = load_connector(monkeypatch, fake_site["url"], "agent-key-0123456789", tmp_path)
     dashboard_says(fake_site, paused=False)
     received, other_commands = [], []
-    monkeypatch.setattr(connector, "_start_listener", lambda *a: None)  # we'll check commands by hand
     connector.accept_messages(received.append)
     check_in = fake_site["requests"][0]
     assert (check_in["method"], check_in["path"]) == ("POST", "/api/state")

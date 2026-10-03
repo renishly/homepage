@@ -18,7 +18,8 @@ QUICK START: everything this file offers, in the order you'd usually use it
 
     from pathlib import Path
     from dashboard_connector import (
-        accept_messages, flush, listen, output, report, set_monitor, wait_if_paused,
+        accept_messages, check_in, flush, listen, output, report, set_monitor,
+        start_check_ins, wait_if_paused,
     )
 
     # 1. Optional: let the dashboard send this agent text messages. Until you
@@ -32,14 +33,20 @@ QUICK START: everything this file offers, in the order you'd usually use it
         report("Paused" if command["command"] == "pause" else "Started", "status")
     listen(on_command)
 
-    # 3. Say hello (a status line in the agent's Activity log).
+    # 3. Check in, at a rhythm that suits this agent (see CHECK-INS below).
+    #    An agent that runs all the time checks in in the background:
+    start_check_ins(every=30)        # seconds; shorter = quicker reactions
+    #    ...an agent that runs on a schedule instead calls, at each run:
+    #    check_in(every=3600)        # e.g. an hourly agent
+
+    # 4. Say hello (a status line in the agent's Activity log).
     report("Agent online", "status")
 
-    # 4. Optional: the Monitor, showing either a link to where your data lives,
+    # 5. Optional: the Monitor, showing either a link to where your data lives,
     #    or a PDF shown inside the dashboard (only the latest one is kept).
     set_monitor("https://docs.google.com/spreadsheets/d/...", "Results sheet")
 
-    # 5. Your agent's work loop.
+    # 6. Your agent's work loop.
     while True:
         wait_if_paused()             # a safe point: waits here while paused
         ...                          # your agent's real work
@@ -68,22 +75,38 @@ FUNCTIONS
                              The Monitor: an http(s) link, a PDF (up to 5 MB) shown
                              inside the page, or None to remove it. The label is up
                              to 50 characters.
+  start_check_ins(every)     Check in automatically every `every` seconds, in the
+                             background (for agents that run all the time).
+  check_in(every=None)       Check in once, now (for agents that run on a schedule:
+                             call it at the start of each run). `every` says how
+                             often to expect check-ins; it's remembered.
   accept_messages(on_message)
                              Switch on the dashboard's message box; on_message(text)
-                             receives each message.
-  listen(on_command)         Run on_command(command) when Start/Pause is pressed.
-                             (Messages go to on_message instead, if you set one.)
+                             receives each message, at check-ins.
+  listen(on_command, every=None)
+                             Run on_command(command) when Start/Pause is pressed,
+                             at check-ins. (Messages go to on_message instead, if
+                             set.) Passing `every` also starts background check-ins.
   wait_if_paused()           Wait while the dashboard has this agent paused.
   is_paused()                True while paused.
   flush(), pending()         Send what's waiting in the offline buffer now / count it.
   All of them return quickly and never raise: problems are printed as one-line
   "[dashboard] ..." warnings, and your agent carries on.
 
+CHECK-INS
+  Each agent decides how often it checks in: every few seconds, every few
+  minutes, hourly, daily (1 second to 1 week). A check-in says "I'm here",
+  tells the dashboard how often to expect the next one, and picks up any
+  waiting Start/Pause/messages. The dashboard shows the agent as "online" while
+  it keeps to its own rhythm (plus half an interval of slack), so an hourly
+  agent stays "online" between runs. Agents that never say how often they
+  check in are expected every 60 seconds. Any call to the dashboard also counts
+  as being seen.
+
 START AND PAUSE (the dashboard's buttons)
-  The connector checks in with the dashboard every 3 seconds (this also keeps
-  the agent's card "online"). While paused, output() and set_monitor() hold
-  what you send and deliver it, in order and with its original time, when
-  Start is pressed. report() still goes through, so status lines and errors
+  They reach the agent at its next check-in. While paused, output() and
+  set_monitor() hold what you send and deliver it, in order and with its
+  original time, when Start is pressed. report() still goes through, so status lines and errors
   stay visible. This needs no extra code. To pause the agent's *work* too,
   call wait_if_paused() at safe points in your loop.
 
@@ -140,9 +163,7 @@ BUFFER_DIR = os.getenv("DASHBOARD_BUFFER_DIR") or os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "dashboard_buffer"
 )
 RETRY_SECONDS = 15
-# How often the connector checks in (learns Start/Pause, says whether it accepts
-# messages, and keeps the agent "online"). 0 turns automatic check-ins off.
-CHECK_IN_SECONDS = float(os.getenv("DASHBOARD_CHECK_IN_SECONDS", "3"))
+MIN_CHECK_IN, MAX_CHECK_IN = 1, 7 * 24 * 60 * 60  # check-in interval limits: 1 second to a week
 BUFFER_MAX_ITEMS = 1000  # beyond this, the oldest waiting items are dropped
 BUFFER_MAX_FILE_BYTES = 100 * 1024 * 1024  # 100 MB of waiting files at most
 
@@ -225,19 +246,24 @@ def _warn(what: str, error: Exception) -> None:
 
 
 # =============================================================================
-# Start/Pause and messages
+# Check-ins, Start/Pause and messages
 #
-# The dashboard keeps track of whether each agent is paused. The connector
-# checks in every CHECK_IN_SECONDS (POST /api/state) to learn that, and to say
-# whether this agent accepts messages.
+# A check-in tells the dashboard "I'm here" (keeping the agent "online"), says
+# how often to expect the next one and whether this agent accepts messages,
+# learns whether the agent is paused, and delivers any waiting Start/Pause/
+# messages to your handlers. How often to check in is up to each agent:
+#   - an agent that runs all the time: start_check_ins(every=30) once;
+#   - an agent that runs on a schedule (e.g. hourly): check_in(every=3600) at
+#     the start of each run.
 # =============================================================================
 
 _paused = False  # what the dashboard said at the last check-in
 _state_known = False  # True once a check-in has succeeded
 _accepts_messages = False  # set by accept_messages()
+_declared_every = None  # seconds between check-ins, as this agent declared it
 _message_handler = None
 _command_handler = None
-_listener_started = False
+_check_in_thread = None
 _announced_hold = False
 
 
@@ -251,12 +277,13 @@ def _set_paused(paused: bool) -> None:
 
 
 def _check_in() -> bool:
-    """Tell the dashboard whether we accept messages; learn whether we're paused."""
+    """Send the check-in itself (POST /api/state) and learn the pause state."""
     global _state_known
+    body = {"accepts_messages": _accepts_messages}
+    if _declared_every is not None:
+        body["check_in_every"] = _declared_every
     try:
-        state = _send(
-            "POST", "/api/state", REPORT_TIMEOUT_SECONDS, json={"accepts_messages": _accepts_messages}
-        ).json()
+        state = _send("POST", "/api/state", REPORT_TIMEOUT_SECONDS, json=body).json()
     except (requests.RequestException, ValueError):
         return False  # unreachable: keep the last known state and try again later
     _state_known = True
@@ -264,28 +291,81 @@ def _check_in() -> bool:
     return True
 
 
-def _start_check_ins() -> None:
-    if PROBLEM or CHECK_IN_SECONDS <= 0:
+def _declare_every(every) -> None:
+    """Remember how often this agent checks in (seconds, 1 second to a week).
+
+    Values outside that range are brought into it, with a warning (never an error).
+    """
+    global _declared_every
+    try:
+        wanted = int(every)
+    except (TypeError, ValueError):
+        print(f"[dashboard] Ignoring check-in interval {every!r}: it must be a number of seconds.")
         return
+    allowed = min(max(wanted, MIN_CHECK_IN), MAX_CHECK_IN)
+    if allowed != wanted:
+        print(f"[dashboard] Check-in interval {wanted}s is out of range; using {allowed}s.")
+    _declared_every = allowed
+
+
+def check_in(every: float | None = None) -> bool:
+    """Check in with the dashboard once, now.
+
+    every: how often this agent checks in, in seconds (e.g. 3600 for an hourly
+           agent). The dashboard shows the agent as online while it keeps to
+           this rhythm, plus some slack. Set it once; it's remembered.
+    Also learns whether the agent is paused (see is_paused()) and hands any
+    waiting Start/Pause/messages to your listen()/accept_messages() handlers.
+    Returns True if the dashboard was reached.
+
+    For an agent that runs on a schedule, call it at the start of each run.
+    """
+    if PROBLEM:
+        return False
+    if every is not None:
+        _declare_every(every)
+    reached = _check_in()
+    if reached and (_command_handler is not None or _message_handler is not None):
+        _check_commands()
+    return reached
+
+
+def start_check_ins(every: float = 30) -> None:
+    """Check in automatically every `every` seconds, in the background.
+
+    For agents that run continuously. Start/Pause and messages reach the agent
+    at each check-in, so a shorter interval means quicker reactions (e.g. 5);
+    a longer one means fewer requests (e.g. 300). Calling it again changes the
+    interval.
+    """
+    global _check_in_thread
+    if PROBLEM:
+        print("[dashboard] Not checking in until the settings are fixed.")
+        return
+    _declare_every(every)
+    if _check_in_thread is not None:
+        return  # already running; it picks up the new interval
 
     def loop():
         while True:
-            _check_in()
-            time.sleep(CHECK_IN_SECONDS)
+            check_in()
+            time.sleep(_declared_every)
 
-    threading.Thread(target=loop, name="dashboard-check-in", daemon=True).start()
+    _check_in_thread = threading.Thread(target=loop, name="dashboard-check-in", daemon=True)
+    _check_in_thread.start()
 
 
 def is_paused() -> bool:
-    """True while the dashboard has this agent paused (its Pause button)."""
+    """True while the dashboard has this agent paused (as of the last check-in)."""
     return _paused
 
 
-def wait_if_paused(check_every: float = 1.0) -> bool:
+def wait_if_paused(check_every: float = 5.0) -> bool:
     """If the dashboard has this agent paused, wait here until Start is pressed.
 
     Call it at safe points in your agent's loop, e.g. before starting the next
-    task, so Pause stops the agent's work and not just its outputs.
+    task, so Pause stops the agent's work and not just its outputs. While it
+    waits, it checks in every `check_every` seconds to notice Start.
     Returns True if it had to wait.
     """
     if PROBLEM:
@@ -297,8 +377,7 @@ def wait_if_paused(check_every: float = 1.0) -> bool:
     print("[dashboard] Paused from the dashboard; waiting for Start...")
     while _paused:
         time.sleep(check_every)
-        if CHECK_IN_SECONDS <= 0:
-            _check_in()  # no background check-ins: ask ourselves
+        check_in()
     print("[dashboard] Started again from the dashboard.")
     return True
 
@@ -306,9 +385,10 @@ def wait_if_paused(check_every: float = 1.0) -> bool:
 def accept_messages(on_message) -> None:
     """Switch on the dashboard's message box for this agent.
 
-    on_message(text) is called with each message you send from the dashboard,
-    e.g. to pass it to the agent's LLM. Until an agent calls this, the
-    dashboard keeps its message box switched off.
+    on_message(text) is called with each message you send from the dashboard
+    (e.g. to pass it to the agent's LLM). Messages arrive at the agent's check-ins,
+    so the agent must also check in: start_check_ins() or check_in().
+    Until an agent calls this, the dashboard keeps its message box switched off.
     """
     global _accepts_messages, _message_handler
     if PROBLEM:
@@ -317,7 +397,6 @@ def accept_messages(on_message) -> None:
     _message_handler = on_message
     _accepts_messages = True
     _check_in()  # tell the dashboard straight away
-    _start_listener()
 
 
 # =============================================================================
@@ -667,7 +746,11 @@ def _check_commands(on_command=None) -> None:
     except (requests.RequestException, ValueError) as error:
         _warn("check for commands", error)
         return
+    if not isinstance(commands, list):
+        return  # not the reply we expect (e.g. a proxy's page): ignore it
     for command in commands:
+        if not isinstance(command, dict) or "id" not in command:
+            continue
         name = command.get("command")
         if name in ("start", "pause"):
             _set_paused(name == "pause")
@@ -676,7 +759,7 @@ def _check_commands(on_command=None) -> None:
                 _message_handler((command.get("payload") or {}).get("text", ""))
             elif on_command is not None:
                 on_command(command)
-        except Exception as error:  # a bug in a handler shouldn't stop the listener
+        except Exception as error:  # a bug in a handler shouldn't stop the agent
             report(f"Failed to handle {name!r}: {error}", "error")
         try:
             _send("PATCH", f"/api/commands/{command['id']}", LISTEN_TIMEOUT_SECONDS, json={"status": "done"})
@@ -684,37 +767,22 @@ def _check_commands(on_command=None) -> None:
             _warn(f"mark command {command['id']} done", error)
 
 
-def _start_listener(every_seconds: float = 3) -> threading.Thread | None:
-    """Start checking for commands in the background (once per program)."""
-    global _listener_started
-    if _listener_started or PROBLEM:
-        return None
-    _listener_started = True
+def listen(on_command, every: float | None = None) -> None:
+    """Run on_command(command) when Start or Pause is pressed on the dashboard.
 
-    def loop():
-        while True:
-            _check_commands()
-            time.sleep(every_seconds)
-
-    thread = threading.Thread(target=loop, name="dashboard-listener", daemon=True)
-    thread.start()
-    return thread
-
-
-def listen(on_command, every_seconds: float = 3) -> threading.Thread | None:
-    """Check for Start/Pause/messages every few seconds, in the background.
-
-    on_command(command) is called once per command, where command is a dict
-    like {"id": 7, "command": "start", "payload": None, ...}. Messages go to
-    the accept_messages() handler instead, if you set one.
-    Your agent's own work carries on while this runs.
+    command is a dict like {"id": 7, "command": "start", "payload": None, ...}.
+    Commands arrive at check-ins, so the agent must check in: pass `every`
+    (seconds) to start background check-ins at that rhythm (same as
+    start_check_ins(every)), or call check_in() yourself, e.g. in a scheduled run.
+    Messages go to the accept_messages() handler instead, if you set one.
     """
     global _command_handler
     if PROBLEM:
         print("[dashboard] Not listening for commands until the settings are fixed.")
-        return None
+        return
     _command_handler = on_command
-    return _start_listener(every_seconds)
+    if every is not None:
+        start_check_ins(every)
 
 
 # Items left in the offline buffer by an earlier run are sent in the background.
@@ -722,6 +790,3 @@ if not PROBLEM and os.path.exists(_queue_path()) and pending():
     print(f"[dashboard] {pending()} item(s) waiting in the offline buffer from an earlier run; sending in the background.")
     _start_sender()
     _retry_now.set()
-
-# Check in regularly (Start/Pause, messages, and keeping the agent "online").
-_start_check_ins()

@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from dotenv import load_dotenv
-from sqlalchemy import JSON, Column, LargeBinary
+from sqlalchemy import JSON, Column, LargeBinary, inspect, text
 from sqlmodel import Field, Session, SQLModel, create_engine
 
 # Load secrets from the .env file into environment variables. This lives here
@@ -68,6 +68,10 @@ class Agent(SQLModel, table=True):
     # Set by the agent (accept_messages() in the connector). Until it says it
     # accepts messages, the dashboard's message box is switched off.
     accepts_messages: bool = False
+    # How often the agent says it checks in, in seconds (from every few seconds
+    # to once a day). The dashboard counts it as "online" while it keeps to that
+    # rhythm. None until the agent declares one (then a default is assumed).
+    check_in_seconds: int | None = None
     created_at: datetime = Field(default_factory=utc_now)
     # Updated every time the agent contacts the API; used to show "online".
     # None means the agent has never connected.
@@ -174,12 +178,58 @@ engine = make_engine(DATABASE_URL)
 
 
 def create_db_and_tables() -> None:
-    """Create any tables that don't exist yet.
+    """Create any missing tables, then add any missing columns to existing ones.
 
-    Note: this never changes tables that already exist. If you add or rename
-    columns later, you'll need a migration tool such as Alembic.
+    This handles *adding* things only. Renaming, removing or changing a column
+    still needs a migration tool such as Alembic.
     """
     SQLModel.metadata.create_all(engine)
+    add_missing_columns()
+
+
+def _sql_literal(value) -> str | None:
+    """A default value written as SQL, or None if it isn't a simple value."""
+    if isinstance(value, bool):
+        return "TRUE" if value else "FALSE"
+    if isinstance(value, (int, float)):
+        return repr(value)
+    if isinstance(value, str):
+        return "'" + value.replace("'", "''") + "'"
+    return None
+
+
+def add_missing_columns() -> None:
+    """Add columns that exist in the code above but not yet in the database.
+
+    create_all() only creates whole tables, so when a new field is added to a
+    table that already exists (e.g. on a live database), its column must be
+    added separately. Each new column gets the field's default value, so
+    existing rows stay valid.
+    """
+    inspector = inspect(engine)
+    statements = []
+    for mapper in SQLModel._sa_registry.mappers:
+        model, table = mapper.class_, mapper.local_table
+        if not inspector.has_table(table.name):
+            continue
+        existing = {column["name"] for column in inspector.get_columns(table.name)}
+        for column in table.columns:
+            if column.name in existing:
+                continue
+            column_type = column.type.compile(dialect=engine.dialect)
+            sql = f'ALTER TABLE "{table.name}" ADD COLUMN "{column.name}" {column_type}'
+            field = model.model_fields.get(column.name)
+            default = _sql_literal(field.default) if field is not None else None
+            if default is not None:
+                sql += f" DEFAULT {default}"
+                if not column.nullable:
+                    sql += " NOT NULL"
+            statements.append((f"{table.name}.{column.name}", sql))
+    if statements:
+        with engine.begin() as connection:
+            for name, sql in statements:
+                connection.execute(text(sql))
+                print(f"Database: added the new column {name}")
 
 
 def get_session():

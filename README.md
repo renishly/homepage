@@ -42,13 +42,13 @@ These are the tables. Each side reads what the other writes:
 
 **Each agent has its own API key.** The agent sends it in the `X-API-Key` header, and the site uses it to work out which agent is calling. That's why renaming an agent never disconnects it.
 
-A card shows **online** if its agent has contacted the site in the last 15 seconds, and **never connected** if it hasn't contacted the site yet.
+Each agent decides how often it **checks in**: every few seconds, every few minutes, hourly, or daily. A card shows **online** while its agent keeps to its own rhythm (plus half an interval of slack, at least 30 seconds), so an hourly agent stays online between runs. It shows **offline** once a check-in is overdue, and **never connected** before the first one. Agents that don't say how often they check in are expected every 60 seconds.
 
 Here's the flow:
 
 1. An agent posts an event, and the dashboard shows it (the grid and the Activity list reload every 3 seconds).
 2. You click **Start** on a card, or type a message on an agent's page, and a pending command is saved for that agent.
-3. Each agent checks for its own pending commands every 3 seconds, handles each one, and marks it `done`.
+3. Each agent picks up its own pending commands when it checks in (at whatever rhythm it chose), handles each one, and marks it `done`.
 
 | File | What it does |
 |---|---|
@@ -152,7 +152,9 @@ The same connector works with all three; only these values change. After adding 
 |---|---|
 | `output(content, category)` | **The main one.** Like `print()`, but whatever you pass appears in the agent's **Outputs** section, sorted by `category`. `content` can be text, a number, a link, a list/dict, or a file (a `pathlib.Path`, an open file, or bytes; max 5 MB). |
 | `report(message, kind)` | A status line for the **Activity** log, such as "online", "paused" or an error. |
-| `listen(on_command)` | Optional: runs your own code when Start or Pause is pressed (e.g. to report "Paused"). |
+| `start_check_ins(every)` | For agents that run all the time: check in automatically every `every` seconds, in the background. Start/Pause and messages arrive at each check-in, so shorter means quicker reactions. |
+| `check_in(every)` | For agents that run on a schedule (hourly, daily…): check in once, at the start of each run. `every` tells the dashboard how often to expect it. |
+| `listen(on_command)` | Optional: runs your own code when Start or Pause is pressed (e.g. to report "Paused"), at check-ins. |
 | `wait_if_paused()` / `is_paused()` | Call `wait_if_paused()` at safe points in your agent's loop so **Pause stops its work**; it waits until Start. `is_paused()` just tells you the state. |
 | `accept_messages(on_message)` | Switches on the dashboard's message box for this agent. `on_message(text)` gets each message, for example to pass it to the agent's LLM. |
 | `flush()` / `pending()` | Send anything waiting in the offline buffer now / how many items are waiting. |
@@ -160,7 +162,7 @@ The same connector works with all three; only these values change. After adding 
 
 **Nothing is lost while the dashboard is unreachable.**
 - If the dashboard can't be reached (no internet, a restart, a sleeping free site, a server error), `output()`, `report()` and `set_monitor()` save what they couldn't send. It goes in a `dashboard_buffer` folder next to the connector file (or wherever `DASHBOARD_BUFFER_DIR` points).
-- Saved items are sent automatically, every 15 seconds, oldest first, once the dashboard is back. Each keeps its original time and is marked "(sent late, after reconnecting)" in the Activity log.
+- Saved items are sent automatically, every 15 seconds, oldest first, once the dashboard is back. Each keeps its original time and is marked "(delivered late)" in the Activity log.
 - The buffer survives the agent restarting.
 - **Short scripts** (run on a schedule, then exit) should call `flush()` at the end; anything still waiting goes on the next run.
 - Mistakes that retrying can't fix, such as a wrong key or a file over 5 MB, aren't saved; they're printed once instead.
@@ -169,7 +171,7 @@ The same connector works with all three; only these values change. After adding 
 Note that the buffer only protects against the *dashboard* being unreachable. If the agent runs on a computer that's switched off, the agent isn't running either.
 
 **How Start, Pause and messages work:**
-- The dashboard never touches your agent's program directly. **Start** and **Pause** set a state that the connector checks every 3 seconds, and the card and agent page show a **running/paused** badge.
+- The dashboard never touches your agent's program directly. **Start** and **Pause** set a state that the agent picks up at its next check-in, and the card and agent page show a **running/paused** badge. An agent that checks in hourly therefore reacts within the hour; use `wait_if_paused()` (below) for an instant reaction while it's running.
 - **While paused, logging pauses by itself.** `output()` and `set_monitor()` hold what they're given and send it, in order and at its original time, when you press Start. `report()` still goes through, so you still see status lines and errors. This needs no code in your agent.
 - **To pause the work as well,** call `wait_if_paused()` at safe points in the agent's loop. Only the agent knows where it's safe to stop.
 - **Messages are opt-in.** The message box stays switched off until the agent calls `accept_messages(on_message)`, which tells the dashboard it takes messages. A good fit is an agent with an LLM that can act on instructions like "focus on earnings news". The dashboard notices within 5 seconds and switches the box on.
@@ -311,7 +313,7 @@ Things to get right:
 
 ### Changing tables later
 
-Tables are created automatically on startup (`SQLModel.metadata.create_all`), but this **only creates missing tables**. It never changes existing ones. If you add, rename or remove a column later, you'll need a migration tool such as [Alembic](https://alembic.sqlalchemy.org).
+Tables are created automatically on startup. **New columns** added to the code are also added to existing tables at startup (`add_missing_columns()` in `db.py`), using each field's default, so a live database keeps working after you push. That's how the check-in interval column reached the live database. **Renaming, removing or changing** a column isn't handled; for that you'll need a migration tool such as [Alembic](https://alembic.sqlalchemy.org).
 
 If you ran an earlier version of this project and have an old `local.db`, delete it once so the current tables (agents with their own keys and encrypted key copies, and folders) are created. It only holds test data.
 

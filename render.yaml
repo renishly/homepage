@@ -1,5 +1,9 @@
 # Render Blueprint: tells Render what to create when you click "New > Blueprint".
 # Reference: https://render.com/docs/blueprint-spec
+#
+# The database is NOT on Render: it's a Postgres database hosted elsewhere
+# (currently Supabase's free plan, which doesn't expire). Render only runs the
+# website, and you give it the database's address as DATABASE_URL.
 services:
   - type: web
     name: homepage
@@ -10,13 +14,12 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.3
-      # Filled in automatically from the database defined below.
+      # sync: false = Render asks you to type these in (or set them under the
+      # service's Environment tab). They are never stored in this file or in GitHub.
+      # DATABASE_URL: the Postgres connection string, e.g. Supabase's
+      # "Session pooler" string (IPv4), ending in ?sslmode=require.
       - key: DATABASE_URL
-        fromDatabase:
-          name: homepage-db
-          property: connectionString
-      # sync: false = Render asks you to type these in when creating the Blueprint.
-      # They are never stored in this file or in GitHub.
+        sync: false
       - key: DASHBOARD_USER
         sync: false
       - key: DASHBOARD_PASSWORD
@@ -25,9 +28,3 @@ services:
         sync: false
       - key: KEY_ENCRYPTION_SECRET  # encrypts agents' API keys in the database
         sync: false
-
-databases:
-  - name: homepage-db
-    plan: free  # check Render's current free-tier terms; free databases have expired before
-    databaseName: homepage
-    user: homepage

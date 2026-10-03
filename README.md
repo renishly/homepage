@@ -267,17 +267,19 @@ The tests use an in-memory database and fake secrets, so they never touch
    ```
    Before you commit, run `git status` and make sure `.env` and `local.db` are **not** listed.
 
-2. **Create the Blueprint.** In the [Render dashboard](https://dashboard.render.com), choose **New → Blueprint**, connect your GitHub account, and pick the repository. Render reads `render.yaml` and plans to create:
-   - a web service called `homepage`, and
-   - a Postgres database called `homepage-db`.
+2. **Create a free Postgres database on Supabase.** Render's own free database is deleted after 30 days; Supabase's free one isn't.
+   - Sign up at [supabase.com](https://supabase.com) and create a new project. Choose the region nearest your Render service (Render's default, Oregon, matches **West US (Oregon)**). Generate a database password and save it.
+   - Click **Connect** and copy the **Session pooler** connection string. Supabase's "direct" connection needs IPv6, which Render doesn't use.
+   - Replace `[YOUR-PASSWORD]` in it with your password, and add `?sslmode=require` to the end. That full string is your `DATABASE_URL`. Treat it like a password.
+   - If the password contains symbols such as `@ : / ? # %`, they break the string. Either reset the database password to one with only letters and numbers, or URL-encode those symbols.
 
-   It also links the two by setting `DATABASE_URL` for you.
+3. **Create the Blueprint.** In the [Render dashboard](https://dashboard.render.com), choose **New → Blueprint**, connect your GitHub account, and pick the repository. Render reads `render.yaml` and plans to create a web service called `homepage`.
 
-3. **Enter your secrets.** Render asks for `DASHBOARD_USER`, `DASHBOARD_PASSWORD`, `AGENT_EDIT_PASSWORD` and `KEY_ENCRYPTION_SECRET`. For production, choose **new** values rather than reusing your local ones. Then click **Apply**.
+4. **Enter your secrets.** Render asks for `DATABASE_URL` (from step 2), `DASHBOARD_USER`, `DASHBOARD_PASSWORD`, `AGENT_EDIT_PASSWORD` and `KEY_ENCRYPTION_SECRET`. For production, choose **new** values rather than reusing your local ones. Then click **Apply**.
 
    Agents you added locally live in your local database, not on Render. Add them again on the live dashboard, then give each agent's connector the Render address (`DASHBOARD_URL=https://your-service.onrender.com`) and its new key.
 
-4. **Wait for the deploy** to finish, then open the `https://....onrender.com` URL Render shows you. Check that `/` and `/dashboard` both work.
+5. **Wait for the deploy** to finish, then open the `https://....onrender.com` URL Render shows you. Check that `/` and `/dashboard` both work.
 
 From now on, every `git push` to `main` redeploys automatically. To change a secret later, go to the service's **Environment** tab in Render.
 
@@ -303,8 +305,9 @@ Things to get right:
 ### ⚠️ Free-tier warnings
 
 - **The site sleeps.** A free web service shuts down after a period with no visitors. The next visit wakes it up, which can take about a minute. The agent is built to cope with this: it just prints a message and retries.
-- **Files take up database space.** Output files are stored in the database, and Render's free Postgres is small (1 GB at the time of writing). Keep files small, or send links to files stored elsewhere.
-- **The free database may expire.** Render's free Postgres databases have historically been deleted after a limited time (with an email warning first). Check [Render's current free-tier terms](https://render.com/docs/free), and upgrade to a paid plan before you store anything you'd mind losing.
+- **Files take up database space.** Output files are stored in the database, and Supabase's free database is small (500 MB at the time of writing). Text outputs take little room; keep files small, or send links to files stored elsewhere.
+- **The free database pauses after a week of no activity.** Supabase pauses free projects that see no activity for a week (no agents running, no visits). Your data is kept; restore the project from Supabase's dashboard. Free projects have no automatic backups. Check [Supabase's current terms](https://supabase.com/pricing).
+- **Why not Render's free database?** Render deletes free Postgres databases 30 days after creation (after a 14-day grace period to upgrade). It's fine for a trial, but not for keeping data.
 
 ### Changing tables later
 

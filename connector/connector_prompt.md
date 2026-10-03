@@ -6,6 +6,7 @@ I have an AI agent (the code in this project) and a separate web dashboard where
 2. The agent **reports its status** (online, paused, errors) to the dashboard's activity log.
 3. The agent **receives commands** from the dashboard (Start, Pause, and text messages) and reacts to them.
 4. Optionally, the agent **sets its monitor**. This is either a link to wherever its data lives (such as a Google Sheet or a dashboard), or a PDF the dashboard shows inside the page (such as a daily summary it regenerates on a schedule). Only the latest monitor is shown.
+5. Optionally, the agent **reads what any agent on the dashboard has shared** (including itself) and **deletes its own old data**. See "Reading and deleting" below.
 
 Don't change what the agent already does, beyond what's needed for this.
 
@@ -44,6 +45,18 @@ Read the values from the environment variables `DASHBOARD_URL` and `DASHBOARD_AP
 | `POST /api/state` | `{"check_in_every": <seconds>, "accepts_messages": true or false}`; both optional | `200` with `{"paused": true/false, "accepts_messages": ..., "check_in_every": <seconds>}` |
 | `PUT /api/monitor` | `{"url": "https://...", "label": "Results sheet"}`, or `{"url": null}` to remove it | `200` with `{"url", "label", "applied"}` |
 | `POST /api/monitor/file` | multipart form: `file` (a PDF, max 5 MB) and optional `label` | `200` with `{"filename", "label", "applied"}`, `413` if too big, `422` if not a PDF |
+| `GET /api/agents` | none | `200` with every agent, A to Z (see "Reading and deleting") |
+| `GET /api/agents/{agent}` | none | `200` with one agent plus its output `categories` |
+| `GET /api/agents/{agent}/outputs` | query: `category` (repeatable), `since`, `limit` (1-500, default 50), `offset` | `200` with outputs, newest first |
+| `GET /api/agents/{agent}/events` | query: `type`, `since`, `limit`, `offset` | `200` with activity lines, newest first |
+| `GET /api/agents/{agent}/monitor` | none | `200` with `{"monitor": {...} or null}` |
+| `GET /api/agents/{agent}/monitor.pdf` | none | `200` with the PDF, or `404` if the monitor isn't a PDF |
+| `GET /api/outputs/{id}/file` | none | `200` with the file of a file output |
+| `DELETE /api/outputs/{id}` | none | `200` with `{"deleted": 1}`; `403` if it's another agent's |
+| `DELETE /api/outputs` | query: `category` and/or `before`, or `all=true` | `200` with `{"deleted": <count>}`; `422` with none of them |
+| `DELETE /api/events/{id}` | none | `200` with `{"deleted": 1}`; `403` if it's another agent's |
+| `DELETE /api/events` | query: `before`, or `all=true` | `200` with `{"deleted": <count>}`; `422` with neither |
+| `DELETE /api/monitor` | none | `200` with `{"deleted": 1 or 0}` |
 
 - `type` is `"log"` (shown blue), `"status"` (green), or `"error"` (red).
 - `data` is optional extra detail, such as `{"url": "..."}` or `{"path": "..."}`.
@@ -60,6 +73,24 @@ Read the values from the environment variables `DASHBOARD_URL` and `DASHBOARD_AP
 - `POST /api/events`, `POST /api/outputs`, `POST /api/outputs/file`, `PUT /api/monitor` and `POST /api/monitor/file` also accept an optional `created_at` (an ISO 8601 date and time in UTC, e.g. `2026-10-03T08:00:00Z`). It's sent as a JSON field, or a form field for the file uploads. It's when the item was really made, so items sent late land at their real time. Times in the future are treated as "now", and a late monitor update older than the current monitor is ignored.
 - A wrong or missing key gets `401`. Input the dashboard can't accept (an empty or over-long category, over-long content, a non-PDF monitor file, a bad `created_at`) gets `422`.
 - `applied: false` from a monitor update means it was older than the current monitor and was ignored (this only happens for late updates).
+
+## Reading and deleting
+
+**Any agent can read every agent's data; an agent can only delete its own.**
+
+- `{agent}` in a path is `me` (this agent), another agent's numeric `id`, or its exact name (URL-encoded). An unknown agent gets `404`.
+- An agent looks like `{"id", "name", "you": true for this agent, "folders": [...], "online", "paused", "accepts_messages", "check_in_every", "created_at", "last_seen", "monitor"}`. `GET /api/agents/{agent}` adds `"categories": [{"name", "count", "latest_at"}]`.
+- An output looks like `{"id", "agent_id", "category", "kind", "content", "created_at"}`.
+  - `kind` is `"text"`, `"number"`, `"link"`, `"json"` or `"file"`.
+  - `content` is what was sent: text, a number, or a list/dict; for files, the file's name.
+  - File outputs also have `"file": {"filename", "content_type", "size", "url"}`; GET the `url` (with the key) for the bytes.
+- An activity line looks like `{"id", "agent_id", "type", "message", "data", "created_at"}`.
+- A monitor is `{"kind": "link", "url", "label", "updated_at"}` or `{"kind": "pdf", "filename", "label", "updated_at", "file_url"}`.
+- `since` and `before` are ISO 8601 times like `2026-10-03T08:00:00Z`.
+- Reads never show API keys, nor the Start/Pause/messages sent to an agent.
+- Deleting another agent's output or activity line gets `403`, and changes nothing. Deleting outputs or activity leaves a `"delete"` line in this agent's activity log, so the user can see what went.
+- Deleting everything needs `all=true`, so a missing filter can't wipe everything by mistake.
+- Reads and deletes go straight to the dashboard: don't hold them while paused or put them in the offline buffer. Deletes only affect what the dashboard already has.
 
 ## It must work wherever the dashboard runs
 
@@ -140,6 +171,11 @@ The dashboard can be unreachable for a while: no internet, a redeploy, a sleepin
    Results belong in `output()`, not here. The dashboard already adds a timestamped activity line for every output and monitor update, so don't report those separately.
 
    Keep messages short (one line) and don't send more than about one event per second.
+
+7. **Reading and deleting helpers**, only if this agent has a use for them (ask me):
+   - `agents()`, `read_agent(agent="me")`, `read_outputs(agent="me", category=None, since=None, limit=50, offset=0)`, `read_activity(agent="me", kind=None, since=None, limit=50, offset=0)`, `read_monitor(agent="me")` and `download(item, save_to=None)` (the bytes of a file output or a PDF monitor);
+   - `delete_output(item)`, `delete_outputs(category=None, before=None, everything=False)`, `delete_event(item)` and `delete_activity(before=None, everything=False)`. Refuse to delete without a filter unless `everything=True`.
+   - Like the rest, they must never raise: on failure, print a one-line warning (use the dashboard's `detail` message for `403`, `404` and `422`) and return nothing / `False`.
 
 ## When you're done
 

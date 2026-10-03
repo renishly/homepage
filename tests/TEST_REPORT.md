@@ -669,6 +669,18 @@ This was run when agents still identified themselves by `AGENT_NAME`.
 - **Bug found and fixed:** the page-load animation left an invisible transform on each section, which trapped the settings window inside the header. The animation now leaves nothing behind (`animation-fill-mode: backwards`), and the window covers the screen again.
 - **Tests:** all 258 automated tests still pass; only appearance changed.
 
+## 3p. Agents read every agent's data, and delete only their own
+
+**Result: PASSED** (automated tests; not yet checked on the live site).
+
+- **New endpoints:** `GET /api/agents`, `GET /api/agents/{agent}` (with categories), `.../outputs`, `.../events`, `.../monitor`, `.../monitor.pdf`, and `GET /api/outputs/{id}/file` for reading; `DELETE /api/outputs/{id}`, `DELETE /api/outputs`, `DELETE /api/events/{id}`, `DELETE /api/events` and `DELETE /api/monitor` for deleting. `{agent}` is `me`, an id, or a name.
+- **Reading:** an agent can read another agent's outputs (numbers and lists come back as sent; files are described and downloadable), activity (filterable by type), and monitor (link or PDF). Filters, paging and `since` work; a bad time or a `limit` over 500 gets 422.
+- **Deleting:** an agent can delete its own outputs (their files go too), activity lines and monitor. Another agent's output or activity line gets 403 and nothing changes; bulk deletes only touch the caller's own data; a bulk delete with no filter gets 422 unless `all=true`.
+- **Traceability:** every delete leaves an orange "delete" line in that agent's Activity log, shown on its page.
+- **Privacy:** reads never include keys or the commands/messages sent to an agent. Every read and delete needs a valid key (401 otherwise).
+- **Connector:** `agents`, `read_agent`, `read_outputs`, `read_activity`, `read_monitor`, `download`, `delete_output`, `delete_outputs`, `delete_event`, `delete_activity`. They never raise, refuse an unfiltered bulk delete before sending anything, and show the dashboard's reason for a refusal (e.g. "HTTP 403: Agents can only delete their own outputs").
+- **Tests:** 17 new tests; all 275 pass.
+
 ## 4. Known limitations and things not verified
 
 - **Render:** deployment was not tested. Only the user can do that, following the README. `render.yaml` parses as valid YAML and its field names were checked against Render's Blueprint reference, but Render itself has not validated it.
@@ -681,7 +693,9 @@ This was run when agents still identified themselves by `AGENT_NAME`.
 - **No guessing limit:** wrong agent editing passwords are not rate-limited. Use one that's hard to guess.
 - **Encryption secret:** if `KEY_ENCRYPTION_SECRET` is lost or changed, stored keys can't be viewed any more (the agents keep working). Replace key fixes each agent.
 - **Sub-folder hosting:** the dashboard must be served at the root of a domain or subdomain, not under a sub-folder, because its pages use links starting with `/`.
-- **Storage:** output files live in the database, up to 5 MB each, with no automatic clean-up yet. On Render's small free database, many files will fill it up.
+- **Storage:** output files live in the database, up to 5 MB each. Agents can delete their own old outputs, but there's no automatic clean-up on the dashboard's side yet. On a small free database, many files will fill it up.
+- **Shared reading:** any agent key can read every agent's data. A leaked key exposes all agents' outputs, activity and monitors (but never keys or your messages), until it's replaced.
+- **Deletes aren't buffered:** a delete made while the dashboard is unreachable is not retried, and it doesn't affect outputs still waiting in the agent's offline buffer.
 - **Notifications:** the bell only saves a setting; nothing is sent until the Discord bot exists.
 - **Monitor refresh:** the Monitor checks for changes every 10 seconds, so a new PDF or link can take up to 10 seconds to appear.
 - **PDFs on phones:** some mobile browsers (notably iPhone Safari) only show the first page of a PDF inside a page; **Open ↗** shows the whole document.

@@ -8,7 +8,7 @@ Your personal website, version 1:
   - Each card has Start and Pause buttons, and the last cell is an **Add Agent** card.
   - A folder sidebar shows **All Agents** or just the agents tagged with one folder. It can be folded out of the way, and its corner has an ⓘ guide and **Implement connector** downloads.
   - Click a card to open that agent's page: rename it, tag it with folders, send commands, read its activity log, or delete it.
-- **`/api/...`**: a small API your agent uses to talk to the site.
+- **`/api/...`**: a small API your agents use to talk to the site. Any agent can read every agent's outputs, activity and monitor, but can only delete its own.
 
 Everything is written in Python. The pages use HTML attributes from
 [HTMX](https://htmx.org) and [Alpine.js](https://alpinejs.dev) instead of
@@ -21,12 +21,14 @@ hand-written JavaScript, and [daisyUI](https://daisyui.com) for styling.
  (each   ──POST /api/events───────▶ │ database │ ◀──GET /dashboard/agents/N─
  with its◀─GET /api/commands──────── │ (owned by│ ◀──POST .../agents/N/command
  own key)──PUT /api/monitor───────▶ │ the site)│
+          ◀─GET /api/agents/...─────── │          │   (read any agent's data)
+          ──DELETE /api/outputs...──▶ │          │   (delete its own data only)
                                      └──────────┘
 ```
 
 **One shared database, reached only through the API.** The database belongs to the dashboard website: a SQLite file (`local.db`) on your computer, or the Postgres database Render creates. Agents never connect to it themselves and never need its password. They read and write through the website's API, using their own key, and the website stores everything. This means:
 - an agent can run anywhere that can reach the website;
-- a leaked agent key only gives access to that one agent's data;
+- a leaked agent key lets someone read every agent's outputs, activity and monitor, and post or delete as that one agent (never as another), until you replace the key;
 - moving the dashboard to another host or database never requires changing an agent.
 
 These are the tables. Each side reads what the other writes:
@@ -181,6 +183,29 @@ Note that the buffer only protects against the *dashboard* being unreachable. If
 
 Use a different `category` for each kind of result, for example `"articles"`, `"daily summary"` or `"reports"`.
 
+### Reading other agents' data, and deleting your own
+
+**Any agent can read every agent's data, but can only delete its own.** So agents can build on each other's work (one agent reads the articles another found), and each keeps its own corner tidy.
+
+| Function | What it does |
+|---|---|
+| `agents()` | Every agent on the dashboard, A to Z: id, name, whether it's you, folders, online, paused, check-in rhythm, and its monitor. |
+| `read_agent(agent="me")` | One agent, plus its output categories with counts. |
+| `read_outputs(agent="me", category=None, since=None, limit=50, offset=0)` | An agent's outputs, newest first, with `content` as it was sent (text, a number, or a list/dict). `category` can be one name or a list. |
+| `read_activity(agent="me", kind=None, since=None, limit=50, offset=0)` | An agent's Activity log, newest first; `kind="error"` for just its errors. |
+| `read_monitor(agent="me")` | What an agent's Monitor shows: a link, or a PDF. |
+| `download(item, save_to=None)` | The bytes of a file output or a PDF monitor (and optionally saves them). |
+| `delete_output(item)` / `delete_outputs(category=None, before=None, everything=False)` | Delete one or many of **this agent's** outputs, and their files. Deleting all of them needs `everything=True`. |
+| `delete_event(item)` / `delete_activity(before=None, everything=False)` | Delete one or many of this agent's Activity lines. |
+| `set_monitor(None)` | Remove this agent's Monitor. |
+
+- `agent` is `"me"`, another agent's id, or its exact name (ids never change; names can be renamed).
+- Trying to delete another agent's output or activity line is refused (`403`) and changes nothing. Bulk deletes only ever touch the calling agent's own data.
+- Every delete leaves an orange **delete** line in that agent's Activity log (e.g. `Deleted 3 outputs in "drafts"`), so you can always see what an agent removed.
+- Reads never include API keys, or the Start/Pause/messages you sent an agent.
+- Reads and deletes go straight to the dashboard: they aren't held while paused, and aren't saved in the offline buffer. A delete only affects what the dashboard already has.
+- A handy use: tidy up old data, e.g. `delete_outputs(before=datetime.now(timezone.utc) - timedelta(days=30))`, so the free database doesn't fill up.
+
 ## Using the dashboard
 
 - **Add an agent:** click the **Add Agent** card (the last cell of the grid).
@@ -323,7 +348,8 @@ If you ran an earlier version of this project and have an old `local.db`, delete
 - **Instant updates:** replace the 3-second refresh with Server-Sent Events. HTMX has an SSE extension for this.
 - **Production CSS:** the Tailwind browser build is great for getting started, but it runs in every visitor's browser. Build a small CSS file ahead of time instead with [`pytailwindcss`](https://github.com/timonweb/pytailwindcss).
 - **A real login page:** swap the browser's Basic Auth popup for a proper login form with sessions and a logout button.
-- **Tidy up old outputs:** add automatic clean-up, such as keeping only the last 30 days or the last 500 outputs per category, so the database doesn't fill up.
+- **Tidy up old outputs:** agents can already delete their own old outputs (see "Reading other agents' data, and deleting your own"). A dashboard-side automatic clean-up, such as keeping only the last 30 days, would cover agents that don't.
+- **Limit request rates:** an agent (or a leaked key) can send unlimited requests; a per-agent rate limit would stop one from flooding the database.
 - **Discord notifications:** a bot that reads the `CategoryNotification` table and posts when a marked category gets a new output.
 - **Limit password guesses:** slow down or block repeated wrong agent editing passwords.
 - **Migrations:** add Alembic before you change your tables (see above).

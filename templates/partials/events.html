@@ -2,9 +2,11 @@
    Jinja escapes {{ ... }} values automatically, so HTML sent by the agent
    is shown as text instead of running in your browser. #}
 {# Badge colours by type. "output" and "monitor" lines are added automatically
-   whenever the agent sends an output or its monitor changes. #}
+   whenever the agent sends an output or its monitor changes, and
+   "delete" lines whenever the agent deletes some of its own data. #}
 {% set badge_styles = {"log": "badge-info", "status": "badge-success", "error": "badge-error",
-                       "output": "badge-secondary", "monitor": "badge-accent"} %}
+                       "output": "badge-secondary", "monitor": "badge-accent",
+                       "delete": "badge-warning"} %}
 
 {% if events %}
 <ul class="divide-y divide-(--color-base-300)">

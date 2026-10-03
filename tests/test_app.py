@@ -1554,7 +1554,7 @@ def fake_site():
             self.end_headers()
             self.wfile.write(site["body"])
 
-        do_GET = do_POST = do_PATCH = do_PUT = _answer
+        do_GET = do_POST = do_PATCH = do_PUT = do_DELETE = _answer
 
         def log_message(self, *args):  # keep test output quiet
             pass
@@ -2010,3 +2010,212 @@ def test_command_alert_html_is_escaped(client, session):
 )
 def test_database_url_conversion(given, expected):
     assert normalize_database_url(given) == expected
+
+
+# --- Reading (any agent's data) and deleting (own data only) ---------------
+
+
+def two_agents_with_data(client, session):
+    """agent-1 and agent-2, each with some outputs; agent-2 also has a file and a PDF monitor."""
+    ids = add_agent(client, session, "agent-1"), add_agent(client, session, "agent-2")
+    send_output(client, "first news", "news", name="agent-1")
+    send_output(client, 42, "counts", name="agent-2")
+    send_output(client, {"top": "story"}, "stats", name="agent-2")
+    send_file(client, "notes.txt", b"hello file", "text/plain", category="files", name="agent-2")
+    client.post("/api/monitor/file", files={"file": ("report.pdf", b"%PDF-1.4 test", "application/pdf")},
+                headers=headers_for("agent-2"))
+    return ids
+
+
+def test_agents_can_list_every_agent(client, session):
+    one, two = two_agents_with_data(client, session)
+    response = client.get("/api/agents", headers=headers_for("agent-1"))
+    assert response.status_code == 200
+    agents = response.json()
+    assert [(a["id"], a["name"], a["you"]) for a in agents] == [(one, "agent-1", True), (two, "agent-2", False)]
+    assert agents[1]["monitor"]["kind"] == "pdf"
+    # Never a key, in any form.
+    assert "api_key" not in response.text and key_for("agent-2") not in response.text
+
+
+def test_agent_can_read_another_agents_outputs(client, session):
+    one, two = two_agents_with_data(client, session)
+    outputs = client.get(f"/api/agents/{two}/outputs", headers=headers_for("agent-1")).json()
+    by_category = {o["category"]: o for o in outputs}
+    assert by_category["counts"]["content"] == 42  # a number again, not text
+    assert by_category["stats"]["content"] == {"top": "story"}
+    file_info = by_category["files"]["file"]
+    assert (file_info["filename"], file_info["size"]) == ("notes.txt", 10)
+    # ...and the file itself.
+    file = client.get(file_info["url"], headers=headers_for("agent-1"))
+    assert file.content == b"hello file" and "attachment" in file.headers["content-disposition"]
+
+
+def test_read_outputs_filters_and_pages(client, session):
+    one, two = two_agents_with_data(client, session)
+    picked = client.get(f"/api/agents/{two}/outputs?category=counts&category=stats", headers=headers_for("agent-1"))
+    assert sorted(o["category"] for o in picked.json()) == ["counts", "stats"]
+    newest = client.get(f"/api/agents/{two}/outputs?limit=1", headers=headers_for("agent-1")).json()
+    assert [o["category"] for o in newest] == ["files"]
+    future = (utc_now() + timedelta(hours=1)).isoformat()
+    assert client.get(f"/api/agents/{two}/outputs", params={"since": future},
+                      headers=headers_for("agent-1")).json() == []
+    assert client.get(f"/api/agents/{two}/outputs?since=yesterday", headers=headers_for("agent-1")).status_code == 422
+    assert client.get(f"/api/agents/{two}/outputs?limit=501", headers=headers_for("agent-1")).status_code == 422
+
+
+def test_agents_are_found_by_me_id_or_name(client, session):
+    one, two = two_agents_with_data(client, session)
+    me = client.get("/api/agents/me", headers=headers_for("agent-1")).json()
+    assert (me["id"], me["you"]) == (one, True)
+    by_name = client.get("/api/agents/agent-2", headers=headers_for("agent-1")).json()
+    assert by_name["id"] == two
+    assert {c["name"]: c["count"] for c in by_name["categories"]} == {"counts": 1, "files": 1, "stats": 1}
+    assert client.get("/api/agents/nobody", headers=headers_for("agent-1")).status_code == 404
+
+
+def test_agent_can_read_another_agents_activity_and_monitor(client, session):
+    one, two = two_agents_with_data(client, session)
+    post_event(client, "agent-2", "something broke", type="error")
+    errors = client.get(f"/api/agents/{two}/events?type=error", headers=headers_for("agent-1")).json()
+    assert [e["message"] for e in errors] == ["something broke"]
+    monitor = client.get(f"/api/agents/{two}/monitor", headers=headers_for("agent-1")).json()["monitor"]
+    assert monitor["filename"] == "report.pdf"
+    pdf = client.get(monitor["file_url"], headers=headers_for("agent-1"))
+    assert pdf.content == b"%PDF-1.4 test"
+    assert client.get(f"/api/agents/{one}/monitor.pdf", headers=headers_for("agent-2")).status_code == 404
+
+
+def test_reads_never_show_commands(client, session):
+    one, two = two_agents_with_data(client, session)
+    session.add(Command(agent_id=two, command="message", payload={"text": "secret plan"}))
+    session.commit()
+    for path in (f"/api/agents/{two}", f"/api/agents/{two}/events", f"/api/agents/{two}/outputs", "/api/agents"):
+        assert "secret plan" not in client.get(path, headers=headers_for("agent-1")).text
+
+
+def test_reads_and_deletes_need_a_valid_key(client, session):
+    one, two = two_agents_with_data(client, session)
+    for method, path in [("GET", "/api/agents"), ("GET", f"/api/agents/{two}/outputs"),
+                         ("GET", "/api/outputs/1/file"), ("DELETE", "/api/outputs/1"),
+                         ("DELETE", "/api/outputs?all=true"), ("DELETE", "/api/events?all=true"),
+                         ("DELETE", "/api/monitor")]:
+        assert client.request(method, path).status_code == 401
+        assert client.request(method, path, headers={"X-API-Key": "wrong-key-0123456789"}).status_code == 401
+
+
+def test_agent_can_delete_its_own_output(client, session):
+    one, two = two_agents_with_data(client, session)
+    file_output = session.exec(select(Output).where(Output.kind == "file")).one()
+    file_id = file_output.file_id
+    response = client.delete(f"/api/outputs/{file_output.id}", headers=headers_for("agent-2"))
+    assert response.json() == {"deleted": 1}
+    session.expire_all()
+    assert session.get(Output, file_output.id) is None
+    assert session.get(OutputFile, file_id) is None  # its file went too
+    note = session.exec(select(Event).where(Event.agent_id == two, Event.type == "delete")).one()
+    assert note.message == 'Deleted 1 output in "files"'
+
+
+def test_agent_cannot_delete_another_agents_data(client, session):
+    one, two = two_agents_with_data(client, session)
+    theirs = session.exec(select(Output).where(Output.agent_id == two)).first()
+    assert client.delete(f"/api/outputs/{theirs.id}", headers=headers_for("agent-1")).status_code == 403
+    event_id = post_event(client, "agent-2", "mine").json()["id"]
+    assert client.delete(f"/api/events/{event_id}", headers=headers_for("agent-1")).status_code == 403
+    # Bulk deletes only ever touch the caller's own data.
+    assert client.delete("/api/outputs?all=true", headers=headers_for("agent-1")).json() == {"deleted": 1}
+    assert client.delete("/api/events?all=true", headers=headers_for("agent-1")).status_code == 200
+    session.expire_all()
+    assert len(session.exec(select(Output).where(Output.agent_id == two)).all()) == 3
+    assert session.get(Event, event_id) is not None
+    assert session.get(Agent, two).monitor_file_id is not None
+    assert client.delete("/api/outputs/99999", headers=headers_for("agent-1")).status_code == 404
+
+
+def test_bulk_output_delete_needs_a_filter(client, session):
+    one, two = two_agents_with_data(client, session)
+    assert client.delete("/api/outputs", headers=headers_for("agent-2")).status_code == 422
+    assert client.delete("/api/outputs?category=counts", headers=headers_for("agent-2")).json() == {"deleted": 1}
+    past = (utc_now() - timedelta(hours=1)).isoformat()
+    assert client.delete("/api/outputs", params={"before": past}, headers=headers_for("agent-2")).json() == {"deleted": 0}
+    assert client.delete("/api/outputs?all=true", headers=headers_for("agent-2")).json() == {"deleted": 2}
+    session.expire_all()
+    assert session.exec(select(Output).where(Output.agent_id == two)).all() == []
+    assert len(session.exec(select(OutputFile)).all()) == 1  # only the monitor PDF is left
+
+
+def test_agent_can_clear_its_own_activity(client, session):
+    one, two = two_agents_with_data(client, session)
+    old = Event(agent_id=one, message="old line", created_at=utc_now() - timedelta(days=2))
+    session.add(old)
+    session.commit()
+    assert client.delete("/api/events", headers=headers_for("agent-1")).status_code == 422
+    yesterday = (utc_now() - timedelta(days=1)).isoformat()
+    assert client.delete("/api/events", params={"before": yesterday}, headers=headers_for("agent-1")).json() == {"deleted": 1}
+    client.delete("/api/events?all=true", headers=headers_for("agent-1"))
+    left = client.get("/api/agents/me/events", headers=headers_for("agent-1")).json()
+    assert [e["message"] for e in left] == ["Deleted 2 activity lines"]  # the output line and the first delete note
+
+
+def test_agent_can_remove_its_own_monitor(client, session):
+    one, two = two_agents_with_data(client, session)
+    assert client.delete("/api/monitor", headers=headers_for("agent-2")).json() == {"deleted": 1}
+    assert client.delete("/api/monitor", headers=headers_for("agent-2")).json() == {"deleted": 0}
+    session.expire_all()
+    assert session.get(Agent, two).monitor_file_id is None
+    assert session.exec(select(OutputFile).where(OutputFile.content_type == "application/pdf")).all() == []
+
+
+def test_delete_lines_show_on_the_agent_page(client, session):
+    one, two = two_agents_with_data(client, session)
+    client.delete("/api/outputs?category=stats", headers=headers_for("agent-2"))
+    page = client.get(f"/dashboard/agents/{two}/events", auth=TEST_AUTH).text
+    assert "badge-warning" in page and "Deleted 1 output in &#34;stats&#34;" in page
+
+
+def test_connector_reads_with_filters(monkeypatch, fake_site):
+    connector = load_connector(monkeypatch, fake_site["url"], "agent-key-0123456789")
+    fake_site["status"], fake_site["body"] = 200, b'[{"id": 1, "content": 42}]'
+    since = datetime(2026, 10, 3, 8, 0, tzinfo=timezone.utc)
+    assert connector.read_outputs("agent two", category=["a", "b"], since=since, limit=5) == [{"id": 1, "content": 42}]
+    sent = fake_site["requests"][-1]
+    assert sent["method"] == "GET"
+    assert sent["path"].startswith("/api/agents/agent%20two/outputs?")
+    assert "category=a&category=b" in sent["path"] and "limit=5" in sent["path"]
+    assert "since=2026-10-03T08%3A00%3A00%2B00%3A00" in sent["path"]
+
+
+def test_connector_downloads_files(monkeypatch, fake_site, tmp_path):
+    connector = load_connector(monkeypatch, fake_site["url"], "agent-key-0123456789")
+    fake_site["status"], fake_site["body"] = 200, b"file bytes"
+    target = tmp_path / "saved.txt"
+    item = {"id": 3, "file": {"url": "/api/outputs/3/file"}}
+    assert connector.download(item, save_to=target) == b"file bytes"
+    assert target.read_bytes() == b"file bytes"
+    assert connector.download({"monitor": None}) is None
+
+
+def test_connector_deletes_and_explains_refusals(monkeypatch, fake_site, capsys):
+    connector = load_connector(monkeypatch, fake_site["url"], "agent-key-0123456789")
+    fake_site["status"], fake_site["body"] = 200, b'{"deleted": 4}'
+    assert connector.delete_outputs(category="drafts") == 4
+    assert fake_site["requests"][-1]["method"] == "DELETE"
+    assert fake_site["requests"][-1]["path"] == "/api/outputs?category=drafts"
+    # No filter: nothing is sent.
+    count = len(fake_site["requests"])
+    assert connector.delete_outputs() is None and connector.delete_activity() is None
+    assert connector.delete_output("not an id") is False
+    assert len(fake_site["requests"]) == count
+    # Another agent's output: the dashboard's reason is shown.
+    fake_site["status"], fake_site["body"] = 403, b'{"detail": "Agents can only delete their own outputs"}'
+    assert connector.delete_output({"id": 9}) is False
+    assert "HTTP 403: Agents can only delete their own outputs" in capsys.readouterr().out
+
+
+def test_connector_reads_survive_unreachable_dashboard(monkeypatch, capsys):
+    connector = load_connector(monkeypatch, "http://127.0.0.1:9", "agent-key-0123456789")
+    assert connector.agents() is None
+    assert connector.read_monitor("me") is None
+    assert connector.delete_activity(everything=True) is None
+    assert "can't reach" in capsys.readouterr().out

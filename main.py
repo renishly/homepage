@@ -1611,3 +1611,344 @@ async def set_monitor_pdf(
     session.refresh(stored)
     applied = replace_monitor(session, agent, file=stored, filename=filename, label=label, made_at=created_at)
     return {"filename": filename, "label": agent.monitor_label, "applied": applied}
+
+
+# ---------------------------------------------------------------------------
+# Agent API: reading and deleting
+#
+# Any agent may READ every agent's data (to build on each other's work), but
+# may only DELETE its own. Reads never include API keys or the commands you
+# sent an agent (Start/Pause/messages stay between you and that agent).
+# Deletes are noted in the agent's Activity log, so you can see what went.
+# ---------------------------------------------------------------------------
+
+DEFAULT_READ_LIMIT = 50
+MAX_READ_LIMIT = 500
+
+
+def find_agent(session: Session, caller: Agent, ref: str) -> Agent:
+    """The agent a read is about: "me", its id, or its exact name. 404 if none."""
+    if ref == "me":
+        return caller
+    agent = session.get(Agent, int(ref)) if ref.isdigit() else None
+    if agent is None:
+        agent = session.exec(select(Agent).where(Agent.name == ref)).first()
+    if agent is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return agent
+
+
+def iso(moment: datetime | None) -> str | None:
+    """A time as ISO 8601 text in UTC, e.g. 2026-10-03T08:00:00+00:00."""
+    return as_utc(moment).isoformat() if moment else None
+
+
+def monitor_info(agent: Agent) -> dict | None:
+    """What an agent's Monitor shows, or None if it has none."""
+    common = {"label": agent.monitor_label, "updated_at": iso(agent.monitor_updated_at)}
+    if agent.monitor_file_id:
+        return {"kind": "pdf", "filename": agent.monitor_filename,
+                "file_url": f"/api/agents/{agent.id}/monitor.pdf", **common}
+    if agent.monitor_url:
+        return {"kind": "link", "url": agent.monitor_url, **common}
+    return None
+
+
+def agent_info(session: Session, agent: Agent, caller: Agent) -> dict:
+    """Everything one agent may know about another (never its key)."""
+    return {
+        "id": agent.id,
+        "name": agent.name,
+        "you": agent.id == caller.id,
+        "folders": [folder.name for folder in folders_of(session, agent.id)],
+        "online": is_online(agent),
+        "paused": agent.paused,
+        "accepts_messages": agent.accepts_messages,
+        "check_in_every": check_in_interval(agent),
+        "created_at": iso(agent.created_at),
+        "last_seen": iso(agent.last_seen),
+        "monitor": monitor_info(agent),
+    }
+
+
+def output_content(output: Output) -> Any:
+    """An output's content as the agent sent it: a number, a list/dict, or text."""
+    if output.kind in ("number", "json"):
+        return json.loads(output.value)
+    return output.value
+
+
+def outputs_info(session: Session, outputs: list[Output]) -> list[dict]:
+    """Outputs as JSON. Files are described (name, type, size, address), not included."""
+    file_ids = [output.file_id for output in outputs if output.file_id]
+    files = {}
+    if file_ids:
+        # Only the small columns: never load every file's bytes for a listing.
+        rows = session.exec(
+            select(OutputFile.id, OutputFile.content_type, OutputFile.size).where(OutputFile.id.in_(file_ids))
+        )
+        files = {file_id: (content_type, size) for file_id, content_type, size in rows}
+    result = []
+    for output in outputs:
+        item = {
+            "id": output.id,
+            "agent_id": output.agent_id,
+            "category": output.category,
+            "kind": output.kind,
+            "content": output_content(output),
+            "created_at": iso(output.created_at),
+        }
+        if output.file_id in files:
+            content_type, size = files[output.file_id]
+            item["file"] = {"filename": output.value, "content_type": content_type, "size": size,
+                            "url": f"/api/outputs/{output.id}/file"}
+        result.append(item)
+    return result
+
+
+def event_info(event: Event) -> dict:
+    return {"id": event.id, "agent_id": event.agent_id, "type": event.type, "message": event.message,
+            "data": event.data, "created_at": iso(event.created_at)}
+
+
+def parse_time(raw: str | None, name: str) -> datetime | None:
+    """A ?since= / ?before= time from the address, or a 422 error."""
+    if not raw:
+        return None
+    try:
+        return as_utc(datetime.fromisoformat(raw.replace("Z", "+00:00")))
+    except ValueError:
+        raise HTTPException(422, f"{name} must be an ISO date and time, e.g. 2026-10-03T08:00:00Z")
+
+
+def file_response(file: OutputFile, filename: str) -> Response:
+    """A stored file as a download (never shown as a page)."""
+    return Response(
+        file.data,
+        media_type=file.content_type,
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@app.get("/api/agents")
+def api_list_agents(
+    caller: Agent = Depends(require_agent),
+    session: Session = Depends(get_session),
+) -> list[dict]:
+    """Every agent on the dashboard, A to Z. "you": true marks the caller."""
+    agents = session.exec(select(Agent).order_by(func.lower(Agent.name))).all()
+    return [agent_info(session, agent, caller) for agent in agents]
+
+
+@app.get("/api/agents/{ref}")
+def api_get_agent(
+    ref: str,
+    caller: Agent = Depends(require_agent),
+    session: Session = Depends(get_session),
+) -> dict:
+    """One agent ("me", an id, or a name), with its output categories."""
+    agent = find_agent(session, caller, ref)
+    rows = session.exec(
+        select(Output.category, func.count(Output.id), func.max(Output.created_at))
+        .where(Output.agent_id == agent.id)
+        .group_by(Output.category)
+        .order_by(func.lower(Output.category))
+    )
+    info = agent_info(session, agent, caller)
+    info["categories"] = [
+        {"name": name, "count": count, "latest_at": iso(latest)} for name, count, latest in rows
+    ]
+    return info
+
+
+@app.get("/api/agents/{ref}/outputs")
+def api_read_outputs(
+    ref: str,
+    category: list[str] | None = Query(None),
+    since: str | None = None,
+    limit: int = Query(DEFAULT_READ_LIMIT, ge=1, le=MAX_READ_LIMIT),
+    offset: int = Query(0, ge=0),
+    caller: Agent = Depends(require_agent),
+    session: Session = Depends(get_session),
+) -> list[dict]:
+    """An agent's outputs, newest first. Optional: only some categories
+    (repeat ?category=), only those made at or after ?since=, and paging."""
+    agent = find_agent(session, caller, ref)
+    statement = select(Output).where(Output.agent_id == agent.id)
+    if category:
+        statement = statement.where(Output.category.in_(category))
+    if (since_time := parse_time(since, "since")) is not None:
+        statement = statement.where(Output.created_at >= since_time)
+    statement = statement.order_by(Output.created_at.desc(), Output.id.desc()).offset(offset).limit(limit)
+    return outputs_info(session, list(session.exec(statement).all()))
+
+
+@app.get("/api/outputs/{output_id}/file")
+def api_output_file(
+    output_id: int,
+    caller: Agent = Depends(require_agent),
+    session: Session = Depends(get_session),
+) -> Response:
+    """The file of any agent's file output."""
+    output = session.get(Output, output_id)
+    file = session.get(OutputFile, output.file_id) if output and output.file_id else None
+    if file is None:
+        raise HTTPException(status_code=404, detail="File not found")
+    return file_response(file, output.value)
+
+
+@app.get("/api/agents/{ref}/events")
+def api_read_events(
+    ref: str,
+    type: str | None = None,
+    since: str | None = None,
+    limit: int = Query(DEFAULT_READ_LIMIT, ge=1, le=MAX_READ_LIMIT),
+    offset: int = Query(0, ge=0),
+    caller: Agent = Depends(require_agent),
+    session: Session = Depends(get_session),
+) -> list[dict]:
+    """An agent's Activity log, newest first. Optional: one ?type=, ?since=, paging."""
+    agent = find_agent(session, caller, ref)
+    statement = select(Event).where(Event.agent_id == agent.id)
+    if type:
+        statement = statement.where(Event.type == type)
+    if (since_time := parse_time(since, "since")) is not None:
+        statement = statement.where(Event.created_at >= since_time)
+    statement = statement.order_by(Event.created_at.desc(), Event.id.desc()).offset(offset).limit(limit)
+    return [event_info(event) for event in session.exec(statement).all()]
+
+
+@app.get("/api/agents/{ref}/monitor")
+def api_read_monitor(
+    ref: str,
+    caller: Agent = Depends(require_agent),
+    session: Session = Depends(get_session),
+) -> dict:
+    """What an agent's Monitor shows: {"monitor": {...}} or {"monitor": null}."""
+    return {"monitor": monitor_info(find_agent(session, caller, ref))}
+
+
+@app.get("/api/agents/{ref}/monitor.pdf")
+def api_read_monitor_pdf(
+    ref: str,
+    caller: Agent = Depends(require_agent),
+    session: Session = Depends(get_session),
+) -> Response:
+    """The PDF an agent's Monitor shows (404 if its monitor isn't a PDF)."""
+    agent = find_agent(session, caller, ref)
+    file = session.get(OutputFile, agent.monitor_file_id) if agent.monitor_file_id else None
+    if file is None:
+        raise HTTPException(status_code=404, detail="This agent's monitor isn't a PDF")
+    return file_response(file, agent.monitor_filename or "monitor.pdf")
+
+
+def delete_outputs(session: Session, agent: Agent, outputs: list[Output], what: str) -> int:
+    """Delete some of the caller's outputs (and their files), log it, and commit."""
+    for output in outputs:
+        file = session.get(OutputFile, output.file_id) if output.file_id else None
+        session.delete(output)
+        if file is not None:
+            session.delete(file)
+    if outputs:
+        count = len(outputs)
+        log_activity(session, agent.id, "delete", f"Deleted {count} output{'s' if count != 1 else ''}{what}")
+    session.commit()
+    return len(outputs)
+
+
+@app.delete("/api/outputs/{output_id}")
+def api_delete_output(
+    output_id: int,
+    agent: Agent = Depends(require_agent),
+    session: Session = Depends(get_session),
+) -> dict:
+    """Delete one of the caller's own outputs. Other agents' outputs get 403."""
+    output = session.get(Output, output_id)
+    if output is None:
+        raise HTTPException(status_code=404, detail="Output not found")
+    if output.agent_id != agent.id:
+        raise HTTPException(status_code=403, detail="Agents can only delete their own outputs")
+    return {"deleted": delete_outputs(session, agent, [output], f' in "{output.category}"')}
+
+
+@app.delete("/api/outputs")
+def api_delete_outputs(
+    category: str | None = None,
+    before: str | None = None,
+    all: bool = False,
+    agent: Agent = Depends(require_agent),
+    session: Session = Depends(get_session),
+) -> dict:
+    """Delete many of the caller's own outputs: one ?category=, and/or those
+    made before ?before=. Deleting everything needs ?all=true, so a missing
+    filter can't wipe everything by mistake."""
+    before_time = parse_time(before, "before")
+    if category is None and before_time is None and not all:
+        raise HTTPException(422, "say what to delete: category, before, or all=true")
+    statement = select(Output).where(Output.agent_id == agent.id)
+    what = ""
+    if category is not None:
+        statement = statement.where(Output.category == " ".join(category.split()))
+        what += f' in "{" ".join(category.split())}"'
+    if before_time is not None:
+        statement = statement.where(Output.created_at < before_time)
+        what += f" made before {before_time:%Y-%m-%d %H:%M:%S} UTC"
+    return {"deleted": delete_outputs(session, agent, list(session.exec(statement).all()), what)}
+
+
+def delete_events(session: Session, agent: Agent, events: list[Event]) -> int:
+    """Delete some of the caller's Activity lines, leave one line saying so, and commit."""
+    for event in events:
+        session.delete(event)
+    if events:
+        count = len(events)
+        log_activity(session, agent.id, "delete", f"Deleted {count} activity line{'s' if count != 1 else ''}")
+    session.commit()
+    return len(events)
+
+
+@app.delete("/api/events/{event_id}")
+def api_delete_event(
+    event_id: int,
+    agent: Agent = Depends(require_agent),
+    session: Session = Depends(get_session),
+) -> dict:
+    """Delete one of the caller's own Activity lines. Other agents' lines get 403."""
+    event = session.get(Event, event_id)
+    if event is None:
+        raise HTTPException(status_code=404, detail="Event not found")
+    if event.agent_id != agent.id:
+        raise HTTPException(status_code=403, detail="Agents can only delete their own activity")
+    return {"deleted": delete_events(session, agent, [event])}
+
+
+@app.delete("/api/events")
+def api_delete_events(
+    before: str | None = None,
+    all: bool = False,
+    agent: Agent = Depends(require_agent),
+    session: Session = Depends(get_session),
+) -> dict:
+    """Delete the caller's Activity lines made before ?before=, or all of them with ?all=true."""
+    before_time = parse_time(before, "before")
+    if before_time is None and not all:
+        raise HTTPException(422, "say what to delete: before, or all=true")
+    statement = select(Event).where(Event.agent_id == agent.id)
+    if before_time is not None:
+        statement = statement.where(Event.created_at < before_time)
+    return {"deleted": delete_events(session, agent, list(session.exec(statement).all()))}
+
+
+@app.delete("/api/monitor")
+def api_delete_monitor(
+    agent: Agent = Depends(require_agent),
+    session: Session = Depends(get_session),
+) -> dict:
+    """Remove the caller's own Monitor (the same as setting it to null)."""
+    had_monitor = bool(agent.monitor_url or agent.monitor_file_id)
+    if had_monitor:
+        replace_monitor(session, agent)
+    return {"deleted": 1 if had_monitor else 0}

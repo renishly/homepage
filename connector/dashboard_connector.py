@@ -63,6 +63,15 @@ QUICK START: everything this file offers, in the order you'd usually use it
     # A short script that runs on a schedule and then exits should end with:
     flush()                          # try to send anything still waiting
 
+    # 7. Optional: read what any agent on the dashboard has shared, and tidy
+    #    up this agent's own data (agents can only delete their own).
+    from dashboard_connector import agents, read_outputs, download, delete_outputs
+    for other in agents() or []:                      # every agent, A to Z
+        for item in read_outputs(other["name"], category="reports", limit=5) or []:
+            if item["kind"] == "file":
+                download(item, save_to=item["file"]["filename"])
+    delete_outputs(category="drafts")                 # this agent's own only
+
 FUNCTIONS
   output(content, category)  Show a result in Outputs, sorted by category (1-50
                              characters; the dashboard can filter by it and pin
@@ -90,6 +99,25 @@ FUNCTIONS
   wait_if_paused()           Wait while the dashboard has this agent paused.
   is_paused()                True while paused.
   flush(), pending()         Send what's waiting in the offline buffer now / count it.
+
+  Reading (any agent's data; `agent` is "me", an agent's id, or its exact name):
+  agents()                   Every agent: id, name, online, paused, monitor, ...
+  read_agent(agent="me")     One agent, plus its output categories.
+  read_outputs(agent="me", category=None, since=None, limit=50, offset=0)
+                             Its outputs, newest first, as dicts (content as sent).
+  read_activity(agent="me", kind=None, since=None, limit=50, offset=0)
+                             Its Activity log, newest first.
+  read_monitor(agent="me")   What its Monitor shows (a link or a PDF), or None.
+  download(item, save_to=None)
+                             The bytes of a file output or a PDF monitor.
+  Deleting (THIS agent's own data only; each delete is noted in its Activity):
+  delete_output(item)        One output (from read_outputs(), or its id).
+  delete_outputs(category=None, before=None, everything=False)
+                             Many outputs; everything=True for all of them.
+  delete_event(item)         One Activity line.
+  delete_activity(before=None, everything=False)
+                             Many Activity lines.
+  set_monitor(None)          Removes the Monitor (see above).
   All of them return quickly and never raise: problems are printed as one-line
   "[dashboard] ..." warnings, and your agent carries on.
 
@@ -127,7 +155,7 @@ import threading
 import time
 import uuid
 from datetime import datetime, timezone
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import requests
 
@@ -224,7 +252,17 @@ def _warn(what: str, error: Exception) -> None:
     """Print a one-line warning with a hint, instead of crashing."""
     response = getattr(error, "response", None)
     status = response.status_code if response is not None else None
-    if status in (301, 302, 303, 307, 308):
+    detail = None
+    if response is not None and status in (403, 404, 422):
+        try:
+            detail = response.json().get("detail")
+        except (ValueError, AttributeError):
+            detail = None
+        if not isinstance(detail, str) or detail == "Not Found":  # "Not Found" = wrong address
+            detail = None
+    if detail:
+        reason = f"HTTP {status}: {detail}"
+    elif status in (301, 302, 303, 307, 308):
         reason = f"{error}. Set DASHBOARD_URL to that address (often https:// instead of http://)"
     elif status == 401:
         reason = "HTTP 401: the API key was refused. Check DASHBOARD_API_KEY (it may have been replaced)"
@@ -732,6 +770,181 @@ def set_monitor(link_or_pdf, label: str | None = None) -> bool:
     else:
         item = {"kind": "monitor", "body": {"url": link_or_pdf, "label": label}}
     return _send_or_buffer(item, "set the monitor")
+
+
+# =============================================================================
+# Reading the dashboard, and deleting this agent's own data
+#
+# Any agent can read every agent's outputs, activity and monitor (to build on
+# each other's work). An agent can only delete its OWN data; trying to delete
+# another agent's gets a warning and changes nothing. Deletes are noted in this
+# agent's Activity log on the dashboard.
+#
+# `agent` is "me" (this agent), another agent's id, or its exact name.
+# These talk to the dashboard straight away: they aren't held while paused or
+# saved in the offline buffer. They return None (reads) or None/False
+# (deletes) if the dashboard couldn't be reached, after printing a warning.
+# Deletes only affect what the dashboard already has, not outputs still
+# waiting in this agent's offline buffer.
+# =============================================================================
+
+
+def _agent_path(agent) -> str:
+    return "/api/agents/" + quote(str(agent), safe="")
+
+
+def _as_time(moment) -> str | None:
+    """A datetime (or ISO text) as the ISO text the dashboard expects."""
+    if moment is None or isinstance(moment, str):
+        return moment
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(timezone.utc).isoformat()
+
+
+def _read(path: str, what: str, params: dict | None = None):
+    """GET some JSON from the dashboard, or None (with a warning) if that fails."""
+    if PROBLEM:
+        return None
+    params = {name: value for name, value in (params or {}).items() if value is not None}
+    try:
+        return _send("GET", path, REPORT_TIMEOUT_SECONDS, params=params).json()
+    except (requests.RequestException, ValueError) as error:
+        _warn(what, error)
+        return None
+
+
+def _delete(path: str, what: str, params: dict | None = None) -> int | None:
+    """DELETE on the dashboard; returns how many things were deleted, or None."""
+    if PROBLEM:
+        return None
+    params = {name: value for name, value in (params or {}).items() if value is not None}
+    try:
+        return int(_send("DELETE", path, REPORT_TIMEOUT_SECONDS, params=params).json().get("deleted", 0))
+    except (requests.RequestException, ValueError, AttributeError, TypeError) as error:
+        _warn(what, error)
+        return None
+
+
+def agents() -> list[dict] | None:
+    """Every agent on the dashboard, A to Z: id, name, "you" (True for this
+    agent), folders, online, paused, accepts_messages, check_in_every,
+    created_at, last_seen, and monitor (or None)."""
+    return _read("/api/agents", "list the agents")
+
+
+def read_agent(agent="me") -> dict | None:
+    """One agent, as in agents(), plus its output "categories" (name, count, latest_at)."""
+    return _read(_agent_path(agent), f"read agent {agent!r}")
+
+
+def read_outputs(agent="me", category=None, since=None, limit: int = 50, offset: int = 0) -> list[dict] | None:
+    """An agent's outputs, newest first.
+
+    category: one category name, or a list of them (default: all).
+    since:    only outputs made at or after this time (a datetime or ISO text).
+    limit/offset: how many (1-500) and how many newest ones to skip, for paging.
+    Each output is a dict: id, agent_id, category, kind ("text", "number",
+    "link", "json" or "file"), content (as sent: text, a number, or a
+    list/dict; a file's name for files), created_at, and for files "file":
+    {filename, content_type, size, url}. Get a file's bytes with download().
+    """
+    params = {"category": [category] if isinstance(category, str) else category,
+              "since": _as_time(since), "limit": limit, "offset": offset}
+    return _read(_agent_path(agent) + "/outputs", f"read outputs of {agent!r}", params)
+
+
+def read_activity(agent="me", kind=None, since=None, limit: int = 50, offset: int = 0) -> list[dict] | None:
+    """An agent's Activity log, newest first: id, agent_id, type, message, data,
+    created_at. kind: only one type, e.g. "error". since/limit/offset: as in read_outputs()."""
+    params = {"type": kind, "since": _as_time(since), "limit": limit, "offset": offset}
+    return _read(_agent_path(agent) + "/events", f"read activity of {agent!r}", params)
+
+
+def read_monitor(agent="me") -> dict | None:
+    """What an agent's Monitor shows: {"kind": "link", "url", "label", "updated_at"}
+    or {"kind": "pdf", "filename", "label", "updated_at", "file_url"}. None if it
+    has no monitor (or it couldn't be read: then a warning is printed).
+    Get a PDF's bytes with download()."""
+    reply = _read(_agent_path(agent) + "/monitor", f"read the monitor of {agent!r}")
+    return reply.get("monitor") if isinstance(reply, dict) else None
+
+
+def download(item, save_to=None) -> bytes | None:
+    """The bytes of a file output or a PDF monitor, from any agent.
+
+    item:    an output from read_outputs(), a monitor from read_monitor(), or an output id.
+    save_to: optional path to also save the file to.
+    Returns None (with a warning) if there's no file or it couldn't be fetched.
+    """
+    if PROBLEM:
+        return None
+    if isinstance(item, dict):
+        path = (item.get("file") or {}).get("url") or item.get("file_url")
+    elif isinstance(item, int):
+        path = f"/api/outputs/{item}/file"
+    else:
+        path = None
+    if not path:
+        print("[dashboard] Nothing to download: that has no file.")
+        return None
+    try:
+        data = _send("GET", path, UPLOAD_TIMEOUT_SECONDS).content
+    except requests.RequestException as error:
+        _warn("download the file", error)
+        return None
+    if save_to is not None:
+        try:
+            with open(save_to, "wb") as handle:
+                handle.write(data)
+        except OSError as error:
+            _warn(f"save the file to {os.fspath(save_to)!r}", error)
+    return data
+
+
+def _id_of(item) -> int | None:
+    """The id of an output/activity line (a dict from a read), or the id itself."""
+    try:
+        return int(item.get("id") if isinstance(item, dict) else item)
+    except (TypeError, ValueError):
+        print(f"[dashboard] Not deleting: {item!r} isn't an output/activity line or its id.")
+        return None
+
+
+def delete_output(item) -> bool:
+    """Delete one of THIS agent's outputs (an output from read_outputs(), or its id).
+    Returns True if it was deleted."""
+    output_id = _id_of(item)
+    return output_id is not None and bool(_delete(f"/api/outputs/{output_id}", f"delete output {output_id}"))
+
+
+def delete_outputs(category: str | None = None, before=None, everything: bool = False) -> int | None:
+    """Delete many of THIS agent's outputs: those in `category`, and/or made
+    before `before` (a datetime or ISO text). Deleting all of them needs
+    everything=True, so a forgotten filter can't wipe everything.
+    Returns how many were deleted, or None if the dashboard couldn't be reached."""
+    if category is None and before is None and not everything:
+        print("[dashboard] Not deleting: give a category, a before time, or everything=True.")
+        return None
+    params = {"category": category, "before": _as_time(before), "all": "true" if everything else None}
+    return _delete("/api/outputs", "delete outputs", params)
+
+
+def delete_event(item) -> bool:
+    """Delete one of THIS agent's Activity lines (from read_activity(), or its id)."""
+    event_id = _id_of(item)
+    return event_id is not None and bool(_delete(f"/api/events/{event_id}", f"delete activity line {event_id}"))
+
+
+def delete_activity(before=None, everything: bool = False) -> int | None:
+    """Delete THIS agent's Activity lines made before `before`, or all of them
+    with everything=True. One line saying how many were deleted is left behind.
+    Returns how many were deleted, or None if the dashboard couldn't be reached."""
+    if before is None and not everything:
+        print("[dashboard] Not deleting: give a before time, or everything=True.")
+        return None
+    params = {"before": _as_time(before), "all": "true" if everything else None}
+    return _delete("/api/events", "delete activity", params)
 
 
 def _check_commands(on_command=None) -> None:

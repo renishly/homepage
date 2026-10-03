@@ -660,7 +660,7 @@ This was run when agents still identified themselves by `AGENT_NAME`.
 
 **Result: PASSED**, checked in the browser at a wide window and at phone size, after one fix.
 
-- **Home:** yellow graph-paper page, the name "Ren" in IBM Plex Mono typing itself out with a blinking cursor, and a black "Open agent dashboard" button with yellow text.
+- **Home:** yellow graph-paper page, the name "Ren" in IBM Plex Mono (letters stretched 10% wider) typing itself out, centred on the name alone (the blinking cursor sits just after it without affecting the centring), and a black "Open agent dashboard" button with yellow text.
 - **Dashboard:** same layout. See-through deep-yellow cards (`#fff466` at 55%, lightly blurred) with black borders and hard shadows that lift on hover; the folders sidebar the same `#ffff83` as the page, see-through (45%); Start in vibrant yellow and Pause in white; the active folder in black; the pulsing light on "online".
 - **Background grid:** squares turned 8° clockwise with a gentle 15° tilt, nearly flat, its near side towards a bearing of about 70° (east-north-east). It fades away on the opposite side and drifts along that bearing; the movement is set to stay on 70° despite the turn, and repeats seamlessly. Measured moving: it rushes in on page load, then drifts.
 - **Second bug found and fixed:** with yellow cards, the grid disappeared. daisyUI paints the page's root element in the card colour, so the body's own yellow background covered the grid. The paper is now painted on the root and the body is transparent, so the grid sits between them.

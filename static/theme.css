@@ -320,7 +320,21 @@ main > *:nth-child(5) { animation-delay: 0.24s; }
 
 /* The home page's name types itself out, then the rest fades in. */
 .hero h1 {
-  animation: type-in 0.9s steps(14, end) both;
+  animation: type-in-hero 0.9s steps(14, end) both;
+  /* Shrink to the name's own width (on its own line), so the page centres the
+     name itself... */
+  width: fit-content;
+  margin-inline: auto;
+  position: relative;
+  /* ...with letters 10% wider (stretched from the centre, so it stays centred). */
+  transform: scaleX(1.1);
+}
+/* The blinking cursor sits just after the name but takes no space, so it
+   doesn't count when centring. */
+.hero h1::after {
+  position: absolute;
+  left: 100%;
+  top: 0;
 }
 .hero p,
 .hero .btn,
@@ -395,6 +409,12 @@ main > *:nth-child(5) { animation-delay: 0.24s; }
 @keyframes rise-in {
   from { opacity: 0; transform: translateY(14px); }
   to { opacity: 1; transform: none; }
+}
+/* Like type-in, but the end leaves room on the right for the home page's
+   cursor, which sits just outside the name. */
+@keyframes type-in-hero {
+  from { clip-path: inset(0 100% 0 0); }
+  to { clip-path: inset(0 -1em 0 0); }
 }
 @keyframes type-in {
   from { clip-path: inset(0 100% 0 0); }

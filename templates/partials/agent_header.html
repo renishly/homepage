@@ -1,0 +1,220 @@
+{# The top of an agent's page: its name with a gear button, its folder tags
+   (display only), and when it was added and last seen.
+
+   Everything you can change lives in the "Agent settings" pop-up (#agent-settings)
+   that the gear opens: name, folder tags, monitor link, API key (view/replace) and delete.
+
+   Renaming and tag changes send their form with HTMX, and the server replies
+   with a fresh copy of this whole section (#agent-header). settings_open tells
+   that copy to keep the pop-up open, so you can carry on editing. #}
+<section id="agent-header" class="space-y-3"
+         x-data="{
+           settingsOpen: {{ 'true' if settings_open else 'false' }},
+           keyAction: null,   // null, 'view' or 'replace': which API key form is showing
+           deleting: false,   // true once 'Delete agent' is clicked, to show the confirmation
+           closeSettings() {
+             // Close the pop-up and wipe any key that was shown, so it isn't left on the page.
+             this.settingsOpen = false;
+             this.keyAction = null;
+             this.deleting = false;
+             this.$refs.viewResult.innerHTML = '';
+             this.$refs.replaceResult.innerHTML = '';
+           },
+         }"
+         @keydown.escape.window="closeSettings()">
+
+  <div class="flex flex-wrap items-center gap-2">
+    <h1 class="text-3xl font-bold tracking-tight break-all">{{ agent.name }}</h1>
+    <button type="button" class="btn btn-ghost btn-sm btn-circle" @click="settingsOpen = true"
+            aria-label="Agent settings" title="Agent settings">
+      {# Gear icon (Heroicons "cog-6-tooth", MIT licence) #}
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5"
+           stroke="currentColor" class="size-6" aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.28Z" />
+        <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+      </svg>
+    </button>
+
+    {% if online %}
+    <span class="badge badge-success badge-soft">online</span>
+    {% elif agent.last_seen %}
+    <span class="badge badge-ghost">offline</span>
+    {% else %}
+    <span class="badge badge-ghost">never connected</span>
+    {% endif %}
+    {% include "partials/run_state.html" %}
+  </div>
+
+  {# Folder tags, shown here for reference; they're changed in the settings. #}
+  {% if tagged %}
+  <div class="flex flex-wrap gap-2" aria-label="Folders">
+    {% for folder in tagged %}
+    <a href="/dashboard?folder={{ folder.id }}" class="badge badge-primary badge-soft">{{ folder.name }}</a>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <p class="text-sm text-base-content/60">
+    Added {{ agent.created_at.strftime("%Y-%m-%d %H:%M") }} UTC
+    &middot;
+    {% if agent.last_seen %}last seen {{ agent.last_seen.strftime("%Y-%m-%d %H:%M:%S") }} UTC{% else %}hasn't connected yet{% endif %}
+  </p>
+
+  <!-- Agent settings pop-up.
+       The server also writes modal-open into class when settings_open is set:
+       after an HTMX swap, HTMX briefly restores the class it received, which
+       would otherwise undo Alpine's modal-open and close the pop-up. -->
+  <div id="agent-settings" class="modal {{ 'modal-open' if settings_open }}"
+       :class="{ 'modal-open': settingsOpen }">
+    <div class="modal-box max-w-xl space-y-6">
+      <h3 class="text-lg font-bold">Agent settings</h3>
+
+      <!-- Name -->
+      <section class="space-y-2">
+        <h4 class="font-semibold">Name</h4>
+        <form class="flex flex-wrap gap-2"
+              hx-post="/dashboard/agents/{{ agent.id }}/rename"
+              hx-target="#agent-header" hx-swap="outerHTML">
+          <input type="text" name="name" value="{{ agent.name }}" required maxlength="50"
+                 class="input flex-1 min-w-48" aria-label="Agent name">
+          <button type="submit" class="btn btn-primary">Save name</button>
+        </form>
+        {% if error %}
+        <p class="text-error text-sm">{{ error }}</p>
+        {% endif %}
+        <p class="text-xs text-base-content/50">Renaming doesn't disconnect the agent; its key stays the same.</p>
+      </section>
+
+      <!-- Folder tags -->
+      <section class="space-y-2">
+        <h4 class="font-semibold">Folders</h4>
+        <div class="flex flex-wrap items-center gap-2">
+          {% for folder in tagged %}
+          <span class="badge badge-primary badge-soft gap-1 pr-1">
+            {{ folder.name }}
+            <button type="button" class="btn btn-ghost btn-xs btn-circle"
+                    hx-post="/dashboard/agents/{{ agent.id }}/tags/{{ folder.id }}/remove"
+                    hx-target="#agent-header" hx-swap="outerHTML"
+                    aria-label="Remove from {{ folder.name }}">&times;</button>
+          </span>
+          {% endfor %}
+
+          {% if untagged %}
+          <form class="join" hx-post="/dashboard/agents/{{ agent.id }}/tags"
+                hx-target="#agent-header" hx-swap="outerHTML">
+            <select name="folder_id" class="select select-sm join-item w-auto" aria-label="Folder">
+              {% for folder in untagged %}
+              <option value="{{ folder.id }}">{{ folder.name }}</option>
+              {% endfor %}
+            </select>
+            <button type="submit" class="btn btn-sm join-item">+ Add tag</button>
+          </form>
+          {% elif not tagged %}
+          <span class="text-sm text-base-content/60">No folders yet. <a href="/dashboard" class="link">Create one in the sidebar</a> to tag this agent.</span>
+          {% endif %}
+        </div>
+      </section>
+
+      <!-- Monitor link (the agent can also set it with set_monitor) -->
+      <section class="space-y-2">
+        <h4 class="font-semibold">Monitor</h4>
+        <form class="space-y-2"
+              hx-post="/dashboard/agents/{{ agent.id }}/monitor"
+              hx-target="#agent-header" hx-swap="outerHTML">
+          <input type="text" name="url" value="{{ agent.monitor_url or '' }}" maxlength="2000"
+                 placeholder="https://docs.google.com/spreadsheets/..." class="input w-full"
+                 aria-label="Monitor link">
+          <div class="flex flex-wrap gap-2">
+            <input type="text" name="label" value="{{ agent.monitor_label or '' }}" maxlength="50"
+                   placeholder="Label, e.g. Results sheet" class="input flex-1 min-w-48" aria-label="Monitor label">
+            <button type="submit" class="btn btn-primary">Save monitor</button>
+          </div>
+        </form>
+        {% if monitor_error %}
+        <p class="text-error text-sm">{{ monitor_error }}</p>
+        {% endif %}
+        <p class="text-xs text-base-content/50">
+          A link to where the agent's data lives (a Google Sheet, a dashboard...). Saving a link replaces the current
+          monitor, including a PDF. Leave it empty and save to remove the monitor. The agent can also set a link, or
+          a PDF to show inside the page, with <code>set_monitor()</code>.
+          {% if agent.monitor_file_id %}<br>Currently showing the PDF <strong>{{ agent.monitor_filename }}</strong> from the agent.{% endif %}
+        </p>
+      </section>
+
+      <!-- API key: viewing or replacing it needs the agent editing password -->
+      <section class="space-y-2">
+        <h4 class="font-semibold">API key</h4>
+        <div class="flex flex-wrap gap-2">
+          <button type="button" class="btn btn-sm" :class="{ 'btn-active': keyAction === 'view' }"
+                  @click="keyAction = keyAction === 'view' ? null : 'view'">View key</button>
+          <button type="button" class="btn btn-sm" :class="{ 'btn-active': keyAction === 'replace' }"
+                  @click="keyAction = keyAction === 'replace' ? null : 'replace'">Replace key</button>
+        </div>
+
+        {# View key. The key appears in #view-key-result; closing settings clears it. #}
+        <form x-show="keyAction === 'view'" x-cloak class="space-y-3 rounded-box bg-base-200 p-4"
+              hx-post="/dashboard/agents/{{ agent.id }}/key/view" hx-target="#view-key-result"
+              hx-on::after-request="this.reset()">
+          <fieldset class="fieldset">
+            <legend class="fieldset-legend">Agent editing password</legend>
+            <input type="password" name="password" required autocomplete="off" class="input w-full">
+          </fieldset>
+          <button type="submit" class="btn btn-primary btn-sm">Show key</button>
+          <div id="view-key-result" x-ref="viewResult" aria-live="polite"></div>
+        </form>
+
+        {# Replace key. #}
+        <form x-show="keyAction === 'replace'" x-cloak class="space-y-3 rounded-box bg-base-200 p-4"
+              hx-post="/dashboard/agents/{{ agent.id }}/key/replace" hx-target="#replace-key-result"
+              hx-on::after-request="this.reset()">
+          <p class="text-sm text-base-content/70">
+            The current key <strong>stops working straight away</strong>. The agent shows as
+            offline until you restart it with the new key.
+          </p>
+          <fieldset class="fieldset">
+            <legend class="fieldset-legend">New key (optional)</legend>
+            <input type="text" name="new_key" autocomplete="off" spellcheck="false"
+                   placeholder="Leave blank to generate one" class="input w-full font-mono">
+          </fieldset>
+          <fieldset class="fieldset">
+            <legend class="fieldset-legend">Agent editing password</legend>
+            <input type="password" name="password" required autocomplete="off" class="input w-full">
+          </fieldset>
+          <button type="submit" class="btn btn-warning btn-sm">Replace key</button>
+          <div id="replace-key-result" x-ref="replaceResult" aria-live="polite"></div>
+        </form>
+      </section>
+
+      <!-- Danger zone: delete -->
+      <section class="space-y-2 rounded-box border border-error/40 p-4">
+        <h4 class="font-semibold text-error">Danger zone</h4>
+        <button type="button" class="btn btn-error btn-outline btn-sm" x-show="!deleting" @click="deleting = true">
+          Delete agent
+        </button>
+        {# Delete confirmation: explains what will be lost and asks for the agent editing password. #}
+        <form x-show="deleting" x-cloak class="space-y-3"
+              hx-post="/dashboard/agents/{{ agent.id }}/delete" hx-target="#delete-result">
+          <p class="text-sm text-base-content/70">
+            Delete &ldquo;{{ agent.name }}&rdquo;? This permanently deletes the agent, its activity
+            log and any commands it hasn't picked up yet. Its API key will stop working.
+            <strong>This can't be undone.</strong>
+          </p>
+          <fieldset class="fieldset">
+            <legend class="fieldset-legend">Agent editing password</legend>
+            <input type="password" name="password" required autocomplete="off" class="input w-full">
+          </fieldset>
+          <div id="delete-result" aria-live="polite"></div>
+          <div class="flex gap-2">
+            <button type="button" class="btn btn-ghost btn-sm" @click="deleting = false">Cancel</button>
+            <button type="submit" class="btn btn-error btn-sm">Delete permanently</button>
+          </div>
+        </form>
+      </section>
+
+      <div class="modal-action mt-0">
+        <button type="button" class="btn" @click="closeSettings()">Close</button>
+      </div>
+    </div>
+    <div class="modal-backdrop" @click="closeSettings()"></div>
+  </div>
+</section>

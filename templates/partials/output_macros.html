@@ -1,0 +1,36 @@
+{# How one output is shown, depending on its kind. Used on the agent's page
+   (full size) and on grid cards (compact=true, for the pinned category).
+
+   output: an Output row. file: {"content_type", "size"} for file outputs, if known.
+   Everything is escaped by Jinja; links are only ever http(s) (checked on arrival).
+   @click.stop keeps a click on a link inside a grid card from opening the agent page. #}
+{% macro content(output, file=None, inline_types=(), compact=false) %}
+  {% if output.kind == "number" %}
+    <p class="font-mono {{ 'text-lg' if compact else 'text-2xl' }} font-semibold">{{ output.value }}</p>
+  {% elif output.kind == "link" %}
+    <a href="{{ output.value }}" target="_blank" rel="noopener noreferrer" @click.stop
+       class="link link-primary break-all {{ 'text-sm line-clamp-1' if compact }}">{{ output.value }}</a>
+  {% elif output.kind == "json" %}
+    {% if compact %}
+      <p class="font-mono text-xs line-clamp-2 break-all">{{ output.value }}</p>
+    {% else %}
+      <pre class="max-h-64 overflow-auto rounded bg-base-200 p-3 text-xs">{{ output.value }}</pre>
+    {% endif %}
+  {% elif output.kind == "file" %}
+    {% if file and file.content_type in inline_types and not compact %}
+      <a href="/dashboard/outputs/{{ output.id }}/file" target="_blank" class="block w-fit">
+        <img src="/dashboard/outputs/{{ output.id }}/file" alt="{{ output.value }}" loading="lazy"
+             class="max-h-64 rounded-box border border-base-300">
+      </a>
+    {% endif %}
+    <p class="{{ 'text-sm' if compact }}">
+      &#128206;
+      <a href="/dashboard/outputs/{{ output.id }}/file" class="link break-all" @click.stop>{{ output.value }}</a>
+      {% if file and not compact %}
+        <span class="text-xs text-base-content/50">({{ (file.size / 1024) | round(1) }} KB)</span>
+      {% endif %}
+    </p>
+  {% else %}
+    <p class="break-words {{ 'text-sm line-clamp-2' if compact else 'whitespace-pre-wrap' }}">{{ output.value }}</p>
+  {% endif %}
+{% endmacro %}

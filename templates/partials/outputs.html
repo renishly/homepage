@@ -1,0 +1,65 @@
+{# The Outputs section of an agent's page: results the agent sent with
+   output(content, category).
+
+   Nothing is shown until you choose what to see in the Filter (the only
+   exception: a pinned category starts ticked). The Filter panel holds:
+   - "All" and a tick box per category, each with its bell (notify me; saved
+     now, sent by a future Discord bot) and pin (show its latest output on the
+     agent's grid card; one pin per agent, shared with the Monitor);
+   - "Sort by" (date, category name or content) and ascending/descending.
+
+   How it updates: this card is drawn once. Changing anything in the Filter
+   form reloads only #outputs-list, and the list also reloads itself every
+   3 seconds, sending the Filter's current values (hx-include). The open
+   panel is never redrawn under your mouse. #}
+<section id="outputs" class="card bg-base-100 shadow-xl">
+  <div class="card-body gap-4">
+    <div class="flex flex-wrap items-center justify-between gap-2">
+      <h2 class="card-title">Outputs</h2>
+
+      <div class="relative" x-data="{ open: false }" @click.outside="open = false" @keydown.escape.window="open = false">
+        <button type="button" class="btn btn-sm" @click="open = !open" :aria-expanded="open">
+          <span aria-hidden="true">&#9776;</span> Filter:
+          {% include "partials/outputs_summary.html" %}
+          <span aria-hidden="true">&#9662;</span>
+        </button>
+
+        <div x-show="open" x-cloak x-transition.origin.top.right
+             class="absolute right-0 z-20 mt-2 w-80 max-w-[calc(100vw-2rem)] rounded-box border border-base-300 bg-base-100 p-4 shadow-2xl">
+          <form id="outputs-filter" class="space-y-4"
+                hx-get="/dashboard/agents/{{ agent.id }}/outputs" hx-trigger="change"
+                hx-target="#outputs-list" hx-swap="innerHTML">
+            <div>
+              <p class="mb-2 text-xs font-semibold uppercase tracking-wide text-base-content/50">Show</p>
+              {% include "partials/outputs_options.html" %}
+            </div>
+
+            <div class="space-y-2 border-t border-base-300 pt-3">
+              <p class="text-xs font-semibold uppercase tracking-wide text-base-content/50">Sort by</p>
+              <select name="sort" class="select select-sm w-full" aria-label="Sort by">
+                {% for value, label in sorts.items() %}
+                <option value="{{ value }}" {{ 'selected' if value == sort }}>{{ label }}</option>
+                {% endfor %}
+              </select>
+              {# daisyUI shows radio inputs with the "btn" class as buttons (using
+                 aria-label as the text), highlighting the chosen one. #}
+              <div class="join w-full">
+                <input type="radio" name="order" value="desc" aria-label="Descending"
+                       class="join-item btn btn-sm flex-1" {{ 'checked' if order == 'desc' }}>
+                <input type="radio" name="order" value="asc" aria-label="Ascending"
+                       class="join-item btn btn-sm flex-1" {{ 'checked' if order == 'asc' }}>
+              </div>
+              <p class="text-xs text-base-content/50">Descending = newest first for dates, Z&ndash;A for names.</p>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <div id="outputs-list"
+         hx-get="/dashboard/agents/{{ agent.id }}/outputs" hx-trigger="every 3s"
+         hx-include="#outputs-filter" hx-swap="innerHTML">
+      {% include "partials/outputs_list.html" %}
+    </div>
+  </div>
+</section>

@@ -1,0 +1,33 @@
+{# The form inside the "Add Agent" window. If something is wrong, the server
+   sends this form back with an error; if it works, agent_created.html
+   replaces it (hx-swap="outerHTML" swaps the whole form). #}
+<form id="add-agent-form" hx-post="/dashboard/agents" hx-swap="outerHTML" class="space-y-2">
+  <h3 class="text-lg font-bold">Add Agent</h3>
+
+  {% if error %}
+  <div role="alert" class="alert alert-error alert-soft text-sm">{{ error }}</div>
+  {% endif %}
+
+  <fieldset class="fieldset">
+    <legend class="fieldset-legend">Name</legend>
+    <input type="text" name="name" value="{{ name }}" required maxlength="50" autocomplete="off"
+           placeholder="e.g. Research bot" class="input w-full">
+  </fieldset>
+
+  <fieldset class="fieldset">
+    <legend class="fieldset-legend">Agent API key</legend>
+    <input type="text" name="api_key" autocomplete="off" spellcheck="false"
+           placeholder="Leave blank to generate one" class="input w-full font-mono">
+    <p class="label whitespace-normal">The key your agent sends in its X-API-Key header. At least 20 characters, no spaces.</p>
+  </fieldset>
+
+  {% if folder_id %}
+  <input type="hidden" name="folder_id" value="{{ folder_id }}">
+  <p class="text-sm text-base-content/60">It will be added to this folder.</p>
+  {% endif %}
+
+  <div class="modal-action">
+    <button type="button" class="btn btn-ghost" @click="open = false">Cancel</button>
+    <button type="submit" class="btn btn-primary">Add agent</button>
+  </div>
+</form>

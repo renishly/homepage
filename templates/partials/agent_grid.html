@@ -1,0 +1,133 @@
+{# One page of the grid: up to 9 cells (agent cards, then the "Add Agent" card)
+   plus the page buttons. HTMX reloads this fragment every 3 seconds. #}
+{% import "partials/output_macros.html" as show %}
+{% set folder_param = "&folder=" ~ folder.id if folder else "" %}
+
+<p class="text-sm text-base-content/60 mb-4">
+  {{ total_agents }} agent{{ "s" if total_agents != 1 }}
+  {% if total_pages > 1 %}&middot; page {{ page }} of {{ total_pages }}{% endif %}
+</p>
+
+<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+  {% for cell in cells %}
+  {% set agent = cell.agent %}
+  {# Clicking anywhere on the card opens the agent's page (Alpine's @click). #}
+  <div class="card bg-base-100 shadow-xl cursor-pointer transition hover:-translate-y-0.5 hover:shadow-2xl hover:ring-2 hover:ring-primary/60"
+       x-data @click="window.location.href = '/dashboard/agents/{{ agent.id }}'">
+    <div class="card-body gap-4">
+
+      <div class="flex items-center justify-between gap-3">
+        <a href="/dashboard/agents/{{ agent.id }}" class="card-title truncate">{{ agent.name }}</a>
+        {% if agent.paused %}
+        <span class="badge badge-warning badge-sm shrink-0" title="Paused from the dashboard">paused</span>
+        {% endif %}
+        {% if cell.online %}
+        <span class="badge badge-success badge-soft badge-sm shrink-0">online</span>
+        {% elif agent.last_seen %}
+        <span class="badge badge-ghost badge-sm shrink-0">offline</span>
+        {% else %}
+        <span class="badge badge-ghost badge-sm shrink-0">never connected</span>
+        {% endif %}
+      </div>
+
+      {% if cell.folders %}
+      <div class="flex flex-wrap gap-1 -mt-2">
+        {% for tag in cell.folders %}
+        <span class="badge badge-outline badge-xs">{{ tag.name }}</span>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      <div class="min-h-12">
+        {% if cell.latest %}
+        <p class="text-sm line-clamp-2 break-words">{{ cell.latest.message }}</p>
+        <p class="text-xs text-base-content/50 font-mono mt-1">{{ cell.latest.created_at.strftime("%H:%M:%S") }} UTC</p>
+        {% else %}
+        <p class="text-sm text-base-content/50">No activity yet.</p>
+        {% endif %}
+      </div>
+
+      {# What's pinned on the agent's page: its Monitor, or the latest output
+         of one category (only one at a time). #}
+      {% if agent.pinned_monitor %}
+      <div class="rounded-box bg-base-200 p-3">
+        <p class="mb-1 flex items-center gap-1 text-xs text-base-content/60">
+          <span aria-hidden="true">&#128204;</span>
+          <span class="truncate">Monitor{% if agent.monitor_label %} &middot; {{ agent.monitor_label }}{% endif %}</span>
+          {% if agent.monitor_updated_at %}<span class="ml-auto shrink-0 whitespace-nowrap font-mono">{{ agent.monitor_updated_at.strftime("%H:%M") }} UTC</span>{% endif %}
+        </p>
+        {% if agent.monitor_file_id %}
+        <p class="text-sm">&#128196;
+          <a href="/dashboard/agents/{{ agent.id }}/monitor.pdf" target="_blank" class="link break-all" @click.stop>{{ agent.monitor_filename }}</a>
+        </p>
+        {% elif agent.monitor_url %}
+        <a href="{{ agent.monitor_url }}" target="_blank" rel="noopener noreferrer" @click.stop
+           class="link link-primary line-clamp-1 break-all text-sm">{{ agent.monitor_url }}</a>
+        {% else %}
+        <p class="text-sm text-base-content/50">Nothing yet.</p>
+        {% endif %}
+      </div>
+      {% elif agent.pinned_category %}
+      <div class="rounded-box bg-base-200 p-3">
+        <p class="mb-1 flex items-center gap-1 text-xs text-base-content/60">
+          <span aria-hidden="true">&#128204;</span>
+          <span class="truncate">{{ agent.pinned_category }}</span>
+          {% if cell.pinned %}<span class="ml-auto shrink-0 whitespace-nowrap font-mono">{{ cell.pinned.created_at.strftime("%H:%M") }} UTC</span>{% endif %}
+        </p>
+        {% if cell.pinned %}
+          {{ show.content(cell.pinned, None, (), compact=true) }}
+        {% else %}
+          <p class="text-sm text-base-content/50">Nothing yet.</p>
+        {% endif %}
+      </div>
+      {% endif %}
+
+      {# @click.stop keeps button clicks from also opening the agent's page. #}
+      <div class="card-actions" @click.stop>
+        <button class="btn btn-success btn-sm"
+                hx-post="/dashboard/agents/{{ agent.id }}/command"
+                hx-vals='{"command": "start"}'
+                hx-target="#toasts" hx-swap="beforeend">
+          Start
+        </button>
+        <button class="btn btn-warning btn-sm"
+                hx-post="/dashboard/agents/{{ agent.id }}/command"
+                hx-vals='{"command": "pause"}'
+                hx-target="#toasts" hx-swap="beforeend">
+          Pause
+        </button>
+      </div>
+
+    </div>
+  </div>
+  {% endfor %}
+
+  {% if show_add_card %}
+  {# The "Add Agent" card opens the Add Agent window (see dashboard.html). #}
+  <button type="button" x-data @click="$dispatch('open-add-agent')"
+          class="card border-2 border-dashed border-base-content/20 min-h-48 cursor-pointer transition hover:border-primary hover:text-primary text-base-content/60">
+    <span class="card-body items-center justify-center text-center gap-2">
+      <span class="text-4xl leading-none">+</span>
+      <span class="font-semibold">Add Agent</span>
+      {% if total_agents == 0 %}
+      <span class="text-sm">{{ "This folder is empty." if folder else "No agents yet." }} Add your first one.</span>
+      {% endif %}
+    </span>
+  </button>
+  {% endif %}
+</div>
+
+{% if total_pages > 1 %}
+<nav class="flex justify-center mt-10" aria-label="Grid pages">
+  <div class="join">
+    <a href="/dashboard?page={{ page - 1 }}{{ folder_param }}"
+       class="join-item btn {{ 'btn-disabled' if page == 1 }}" aria-label="Previous page">&laquo;</a>
+    {% for number in range(1, total_pages + 1) %}
+    <a href="/dashboard?page={{ number }}{{ folder_param }}"
+       class="join-item btn {{ 'btn-primary' if number == page }}">{{ number }}</a>
+    {% endfor %}
+    <a href="/dashboard?page={{ page + 1 }}{{ folder_param }}"
+       class="join-item btn {{ 'btn-disabled' if page == total_pages }}" aria-label="Next page">&raquo;</a>
+  </div>
+</nav>
+{% endif %}

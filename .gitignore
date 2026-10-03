@@ -1,0 +1,19 @@
+# Python virtual environment (recreate with: python3 -m venv .venv)
+.venv/
+
+# Real secrets - never commit this file
+.env
+
+# Local SQLite database
+local.db
+
+# The connector's offline buffer (items waiting to be sent)
+dashboard_buffer/
+
+# Python / pytest caches
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# macOS
+.DS_Store

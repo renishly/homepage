@@ -1,0 +1,253 @@
+{% extends "base.html" %}
+
+{% block title %}{{ current_folder.name if current_folder else "All Agents" }} · Agent Dashboard{% endblock %}
+
+{% block body_attrs %}hx-headers='{"X-CSRF-Token": "{{ csrf_token() }}"}'{% endblock %}
+
+{% block content %}
+{# daisyUI "drawer": the folder sidebar.
+   - On phones it slides in from the left (the checkbox opens/closes it).
+   - On large screens it sits beside the grid, and can be folded away with
+     the « button. sidebarOpen remembers your choice in this browser
+     (localStorage), so it stays folded as you move between folders. #}
+<div class="drawer" :class="{ 'lg:drawer-open': sidebarOpen }"
+     x-data="{
+       sidebarOpen: true,
+       init() {
+         // try/catch: some browsers block storage (e.g. private windows); then we just don't remember.
+         try { this.sidebarOpen = localStorage.getItem('sidebarOpen') !== 'false'; } catch (e) {}
+       },
+       setSidebar(open) {
+         this.sidebarOpen = open;
+         try { localStorage.setItem('sidebarOpen', open); } catch (e) {}
+       },
+     }">
+  <input id="folder-sidebar" type="checkbox" class="drawer-toggle">
+
+  <!-- Main area -->
+  <div class="drawer-content">
+    <main class="mx-auto max-w-6xl px-4 py-8 sm:py-12 space-y-8">
+
+      <header class="flex flex-wrap items-start justify-between gap-4">
+        <div class="min-w-0">
+          {# Phones: open the slide-in sidebar. Large screens: show it again after folding it away. #}
+          <label for="folder-sidebar" class="btn btn-ghost btn-sm -ml-3 mb-2 lg:hidden">&#9776; Folders</label>
+          <button type="button" x-show="!sidebarOpen" x-cloak @click="setSidebar(true)"
+                  class="btn btn-ghost btn-sm -ml-3 mb-2 hidden lg:inline-flex">&#9776; Folders</button>
+          <p class="text-sm text-base-content/60">Agent Dashboard &middot; signed in as {{ user }}</p>
+          <h1 class="text-3xl font-bold tracking-tight truncate">
+            {{ current_folder.name if current_folder else "All Agents" }}
+          </h1>
+        </div>
+        <a href="/" class="btn btn-ghost btn-sm">&larr; Home</a>
+      </header>
+
+      {% if error %}
+      <div role="alert" class="alert alert-error alert-soft">{{ error }}</div>
+      {% endif %}
+
+      {% if current_folder %}
+      {# Folder settings: rename (shows a small form) and delete (asks first). #}
+      <div class="flex flex-wrap items-center gap-2" x-data="{ renaming: false, confirmDelete: false }"
+           @keydown.escape.window="confirmDelete = false">
+        <button class="btn btn-ghost btn-sm" x-show="!renaming" @click="renaming = true">&#9998; Rename folder</button>
+        <form x-show="renaming" x-cloak method="post" action="/dashboard/folders/{{ current_folder.id }}/rename"
+              class="flex flex-wrap gap-2">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input type="text" name="name" value="{{ current_folder.name }}" required maxlength="40"
+                 class="input input-sm" aria-label="Folder name">
+          <button type="submit" class="btn btn-primary btn-sm">Save</button>
+          <button type="button" class="btn btn-ghost btn-sm" @click="renaming = false">Cancel</button>
+        </form>
+        <button class="btn btn-ghost btn-sm text-error" @click="confirmDelete = true">Delete folder</button>
+
+        <div class="modal" :class="{ 'modal-open': confirmDelete }">
+          <div class="modal-box">
+            <h3 class="text-lg font-bold">Delete the folder &ldquo;{{ current_folder.name }}&rdquo;?</h3>
+            <p class="py-4 text-base-content/70">The agents inside are <strong>not</strong> deleted. They just lose this folder tag.</p>
+            <form method="post" action="/dashboard/folders/{{ current_folder.id }}/delete" class="modal-action">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="button" class="btn btn-ghost" @click="confirmDelete = false">Cancel</button>
+              <button type="submit" class="btn btn-error">Delete folder</button>
+            </form>
+          </div>
+          <div class="modal-backdrop" @click="confirmDelete = false"></div>
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- The grid is drawn once here, then HTMX reloads it every 3 seconds
+           so the online badges and latest messages stay up to date. -->
+      <div hx-get="/dashboard/grid?page={{ page }}{% if current_folder %}&folder={{ current_folder.id }}{% endif %}"
+           hx-trigger="every 3s">
+        {% include "partials/agent_grid.html" %}
+      </div>
+
+    </main>
+  </div>
+
+  <!-- Folder sidebar -->
+  <div class="drawer-side z-40">
+    <label for="folder-sidebar" aria-label="Close folders" class="drawer-overlay"></label>
+    <aside class="bg-base-100 min-h-full w-64 p-4 flex flex-col gap-2">
+      <div class="flex items-center justify-between px-2">
+        <span class="text-sm font-semibold text-base-content/60">Folders</span>
+        {# Fold the sidebar away (large screens) or close it (phones). #}
+        <button type="button" class="btn btn-ghost btn-xs hidden lg:inline-flex"
+                @click="setSidebar(false)" aria-label="Hide folders" title="Hide folders">&laquo;</button>
+        <label for="folder-sidebar" class="btn btn-ghost btn-xs lg:hidden" aria-label="Close folders">&times;</label>
+      </div>
+      <ul class="menu w-full gap-1">
+        <li>
+          <a href="/dashboard" class="{{ 'menu-active' if not current_folder }}">
+            All Agents
+            <span class="badge badge-sm badge-ghost ml-auto">{{ all_count }}</span>
+          </a>
+        </li>
+        {% for item in folders %}
+        <li>
+          <a href="/dashboard?folder={{ item.folder.id }}"
+             class="{{ 'menu-active' if current_folder and current_folder.id == item.folder.id }}">
+            <span class="truncate">{{ item.folder.name }}</span>
+            <span class="badge badge-sm badge-ghost ml-auto">{{ item.count }}</span>
+          </a>
+        </li>
+        {% endfor %}
+      </ul>
+
+      {# "Add folder": a button that turns into a small form (Alpine.js). #}
+      <div x-data="{ adding: false }" class="px-2">
+        <button class="btn btn-ghost btn-sm w-full justify-start" x-show="!adding"
+                @click="adding = true; $nextTick(() => $refs.folderName.focus())">
+          + Add folder
+        </button>
+        <form x-show="adding" x-cloak method="post" action="/dashboard/folders" class="space-y-2">
+          {# Plain HTML forms send the CSRF token as a hidden field. #}
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <input x-ref="folderName" type="text" name="name" required maxlength="40"
+                 placeholder="Folder name" class="input input-sm w-full" aria-label="New folder name">
+          <div class="flex gap-2">
+            <button type="submit" class="btn btn-primary btn-sm">Create</button>
+            <button type="button" class="btn btn-ghost btn-sm" @click="adding = false">Cancel</button>
+          </div>
+        </form>
+      </div>
+
+      {# Bottom-left corner: how the dashboard works, and the connector downloads. #}
+      <div class="mt-auto pt-4 border-t border-base-300 flex items-center gap-2 px-1">
+        <button type="button" class="btn btn-ghost btn-circle btn-sm" x-data
+                @click="$dispatch('open-info')" aria-label="How this dashboard works" title="How this dashboard works">
+          <span class="inline-flex size-5 items-center justify-center rounded-full border-2 border-current text-xs font-bold leading-none">i</span>
+        </button>
+        <button type="button" class="link link-hover text-sm" x-data @click="$dispatch('open-connector')">
+          Implement connector
+        </button>
+      </div>
+    </aside>
+  </div>
+</div>
+
+{# The "Add Agent" window. It lives outside the grid so the 3-second refresh
+   doesn't wipe what you're typing. The grid's Add Agent card opens it by
+   sending an "open-add-agent" event. #}
+<div x-data="{ open: false }" @open-add-agent.window="open = true" @keydown.escape.window="open = false">
+  <div class="modal" :class="{ 'modal-open': open }">
+    <div class="modal-box">
+      {% with error=None, name="", folder_id=(current_folder.id if current_folder else None) %}
+        {% include "partials/add_agent_form.html" %}
+      {% endwith %}
+    </div>
+    <div class="modal-backdrop" @click="open = false"></div>
+  </div>
+</div>
+
+{# "How this dashboard works" window, opened by the sidebar's (i) button. #}
+<div x-data="{ open: false }" @open-info.window="open = true" @keydown.escape.window="open = false">
+  <div class="modal" :class="{ 'modal-open': open }">
+    <div class="modal-box">
+      <h3 class="text-lg font-bold">How this dashboard works</h3>
+      <ol class="list-decimal space-y-2 pl-5 py-4 text-sm">
+        <li><strong>Your agents run on their own</strong>, anywhere, doing anything: finding news, making PDFs, and so on. Their outputs stay wherever they already go.</li>
+        <li><strong>Add Agent</strong> creates a slot here and gives you that agent's API key.</li>
+        <li><strong>Implement connector</strong> gives you code (or a prompt for an AI assistant) to add to your agent. The agent uses its key to talk to this site.</li>
+        <li>From then on the agent <strong>reports its activity and outputs</strong> to its card and activity log, and checks every few seconds for your <strong>Start</strong>, <strong>Pause</strong> and messages.</li>
+      </ol>
+      <ul class="list-disc space-y-1 pl-5 text-sm text-base-content/70">
+        <li><em>Online</em> means the agent checked in within the last 15 seconds.</li>
+        <li>Folders group agents. Tag an agent from its page.</li>
+        <li>Viewing or replacing a key, and deleting an agent, need the agent editing password.</li>
+      </ul>
+      <div class="modal-action">
+        <button type="button" class="btn" @click="open = false">Got it</button>
+      </div>
+    </div>
+    <div class="modal-backdrop" @click="open = false"></div>
+  </div>
+</div>
+
+{# "Implement connector" window: first choose a format, then preview and download. #}
+<div x-data="{ open: false, format: null }"
+     @open-connector.window="open = true; format = null" @keydown.escape.window="open = false">
+  <div class="modal" :class="{ 'modal-open': open }">
+    <div class="modal-box max-w-3xl">
+      <h3 class="text-lg font-bold">Implement connector</h3>
+
+      <!-- Step 1: choose a format -->
+      <div x-show="format === null" class="space-y-4 pt-4">
+        <p class="text-sm text-base-content/70">
+          Connect one of your agents to this dashboard. Which format do you want?
+        </p>
+        <div class="grid gap-3 sm:grid-cols-2">
+          <button type="button" @click="format = 'code'"
+                  class="card border border-base-300 text-left transition hover:border-primary">
+            <span class="card-body p-4 gap-1">
+              <span class="font-semibold">Code</span>
+              <span class="text-sm text-base-content/70">A ready-made Python file (<code>dashboard_connector.py</code>) to drop into a Python agent.</span>
+            </span>
+          </button>
+          <button type="button" @click="format = 'prompt'"
+                  class="card border border-base-300 text-left transition hover:border-primary">
+            <span class="card-body p-4 gap-1">
+              <span class="font-semibold">Prompt</span>
+              <span class="text-sm text-base-content/70">Instructions for an AI coding assistant, which adds the connector to your agent in whatever language it uses.</span>
+            </span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Step 2a: code -->
+      <div x-show="format === 'code'" x-cloak class="space-y-3 pt-4">
+        <ol class="list-decimal space-y-1 pl-5 text-sm">
+          <li>Download the file and put it next to your agent's code. It needs <code>requests</code> (<code>pip install requests</code>).</li>
+          <li>Fill in the two values marked <strong>REPLACE THIS PLACEHOLDER</strong> near the top, or set them as environment variables instead: <code>DASHBOARD_URL</code> (this dashboard's address) and <code>DASHBOARD_API_KEY</code> (from <strong>Add Agent</strong>).</li>
+          <li>In your agent, use <code>report("...")</code> to send updates and <code>listen(on_command)</code> to receive Start, Pause and messages.</li>
+        </ol>
+        <pre class="max-h-72 overflow-auto rounded bg-base-200 p-3 text-xs"><code>{{ connector_code }}</code></pre>
+      </div>
+
+      <!-- Step 2b: prompt -->
+      <div x-show="format === 'prompt'" x-cloak class="space-y-3 pt-4">
+        <ol class="list-decimal space-y-1 pl-5 text-sm">
+          <li>Download the prompt.</li>
+          <li>Open your agent's project in an AI coding assistant, and give it this file or paste its contents.</li>
+          <li>The assistant will ask you for this dashboard's address and the agent's key (from <strong>Add Agent</strong>) before it writes any code.</li>
+        </ol>
+        <pre class="max-h-72 overflow-auto whitespace-pre-wrap rounded bg-base-200 p-3 text-xs">{{ connector_prompt }}</pre>
+      </div>
+
+      <div class="text-xs text-base-content/60 pt-3 space-y-1">
+        <p>This dashboard's address: <code class="select-all">{{ site_url }}</code>{% if "://127.0.0.1" in site_url or "://localhost" in site_url %}. That's a local address, so it only reaches agents on this computer. Use your deployed address (e.g. <code>https://your-service.onrender.com</code>) for agents running elsewhere{% endif %}.</p>
+        <p>The same download works with a local, Render, or any other dashboard. Only the address and key change, and neither is stored in the file.</p>
+      </div>
+
+      <div class="modal-action">
+        <button type="button" class="btn btn-ghost" x-show="format !== null" @click="format = null">&larr; Back</button>
+        <button type="button" class="btn btn-ghost" @click="open = false">Close</button>
+        <a x-show="format === 'code'" x-cloak href="/dashboard/connector/code" download class="btn btn-primary">Download code</a>
+        <a x-show="format === 'prompt'" x-cloak href="/dashboard/connector/prompt" download class="btn btn-primary">Download prompt</a>
+      </div>
+    </div>
+    <div class="modal-backdrop" @click="open = false"></div>
+  </div>
+</div>
+{% endblock %}

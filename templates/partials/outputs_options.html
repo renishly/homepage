@@ -1,0 +1,39 @@
+{# The Filter panel's "Show" choices: All, then one row per category with its
+   tick box, bell and pin. Ticking a box changes the form, which reloads the
+   list. The bell and pin buttons post the form's current ticks with them, so
+   the reply keeps what's ticked. The hidden "known" fields tell the server
+   which categories are listed here, so it can send fresh rows when new ones
+   appear. #}
+<div id="outputs-options" class="space-y-1" {% if oob %}hx-swap-oob="true"{% endif %}>
+  {% if categories %}
+  <label class="flex cursor-pointer items-center gap-2 rounded px-1 py-1 hover:bg-base-200">
+    <input type="checkbox" name="all" value="true" class="checkbox checkbox-sm" {{ 'checked' if show_all }}>
+    <span class="font-medium">All</span>
+  </label>
+  {% for c in categories %}
+  <div class="flex items-center gap-1 rounded px-1 hover:bg-base-200">
+    <label class="flex min-w-0 flex-1 cursor-pointer items-center gap-2 py-1">
+      <input type="checkbox" name="c" value="{{ c.name }}" class="checkbox checkbox-sm" {{ 'checked' if c.name in selected }}>
+      <span class="truncate">{{ c.name }}</span>
+    </label>
+    <input type="hidden" name="known" value="{{ c.name }}">
+    <button type="button" class="btn btn-ghost btn-xs {{ 'text-warning' if c.notify else 'opacity-40' }}"
+            hx-post="/dashboard/agents/{{ agent.id }}/outputs/notify"
+            hx-vals='{{ {"category": c.name} | tojson }}'
+            hx-target="#outputs-options" hx-swap="outerHTML"
+            aria-pressed="{{ 'true' if c.notify else 'false' }}"
+            aria-label="Notify me about {{ c.name }}"
+            title="{{ 'Notifications on' if c.notify else 'Notify me' }} when &ldquo;{{ c.name }}&rdquo; updates (coming soon: Discord)">&#128276;</button>
+    <button type="button" class="btn btn-ghost btn-xs {{ 'btn-active' if c.pinned else 'opacity-40' }}"
+            hx-post="/dashboard/agents/{{ agent.id }}/outputs/pin"
+            hx-vals='{{ {"category": c.name} | tojson }}'
+            hx-target="#outputs-options" hx-swap="outerHTML"
+            aria-pressed="{{ 'true' if c.pinned else 'false' }}"
+            aria-label="Pin {{ c.name }} to the agent's card"
+            title="{{ 'Pinned to' if c.pinned else 'Pin to' }} this agent's card on the grid">&#128204;</button>
+  </div>
+  {% endfor %}
+  {% else %}
+  <p class="text-sm text-base-content/60">No categories yet. They appear here once the agent sends outputs.</p>
+  {% endif %}
+</div>

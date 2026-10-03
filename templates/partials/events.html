@@ -1,0 +1,26 @@
+{# This is only a fragment of a page: HTMX drops it into the Activity card.
+   Jinja escapes {{ ... }} values automatically, so HTML sent by the agent
+   is shown as text instead of running in your browser. #}
+{# Badge colours by type. "output" and "monitor" lines are added automatically
+   whenever the agent sends an output or its monitor changes. #}
+{% set badge_styles = {"log": "badge-info", "status": "badge-success", "error": "badge-error",
+                       "output": "badge-secondary", "monitor": "badge-accent"} %}
+
+{% if events %}
+<ul class="divide-y divide-(--color-base-300)">
+  {% for event in events %}
+  <li class="flex flex-col sm:flex-row sm:items-start gap-2 sm:gap-4 py-3">
+    <div class="flex items-center gap-3 shrink-0">
+      <span class="badge {{ badge_styles.get(event.type, 'badge-neutral') }} badge-sm w-16">{{ event.type }}</span>
+      <time class="text-xs text-base-content/50 font-mono">{{ event.created_at.strftime("%Y-%m-%d %H:%M:%S") }} UTC</time>
+    </div>
+    <p class="break-words min-w-0">{{ event.message }}</p>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<div class="text-center py-10 text-base-content/60">
+  <p class="text-lg">No activity yet.</p>
+  <p class="text-sm mt-1">Start your agent and its updates will show up here.</p>
+</div>
+{% endif %}

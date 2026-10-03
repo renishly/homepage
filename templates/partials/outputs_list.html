@@ -1,0 +1,29 @@
+{# The output list for the Filter's current choices (reloaded every 3 seconds). #}
+{% import "partials/output_macros.html" as show %}
+{% if outputs %}
+<ul class="divide-y divide-(--color-base-300)">
+  {% for output in outputs %}
+  <li class="flex flex-col gap-2 py-3">
+    <div class="flex items-center gap-2 text-xs text-base-content/60">
+      <span class="badge badge-outline badge-sm">{{ output.category }}</span>
+      <time class="font-mono">{{ output.created_at.strftime("%Y-%m-%d %H:%M:%S") }} UTC</time>
+    </div>
+    {{ show.content(output, files.get(output.file_id), inline_types) }}
+  </li>
+  {% endfor %}
+</ul>
+{% elif not total %}
+<div class="py-8 text-center text-base-content/60">
+  <p>No outputs yet.</p>
+  <p class="mt-1 text-sm">
+    The agent sends them with <code>output(content, "category")</code>. See <strong>Implement connector</strong> on the dashboard.
+  </p>
+</div>
+{% elif not (show_all or selected) %}
+<div class="py-8 text-center text-base-content/60">
+  <p>{{ total }} output{{ "s" if total != 1 }} available.</p>
+  <p class="mt-1 text-sm">Use <strong>Filter</strong> to choose which categories to show.</p>
+</div>
+{% else %}
+<p class="py-8 text-center text-base-content/60">Nothing in the chosen categories yet.</p>
+{% endif %}

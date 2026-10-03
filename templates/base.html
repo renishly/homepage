@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Homepage{% endblock %}</title>
+
+  <!-- Inter font from Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+
+  <!-- daisyUI v5 (ready-made components like cards, buttons and alerts) -->
+  <link href="https://cdn.jsdelivr.net/npm/daisyui@5" rel="stylesheet" type="text/css">
+
+  <!-- Tailwind CSS v4 browser build: turns class names into styles in the browser.
+       Fine for a personal site; see README "Next steps" for a production build. -->
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+  <style type="text/tailwindcss">
+    @theme {
+      /* Use Inter everywhere, falling back to the system font while it loads. */
+      --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+  </style>
+  <!-- Hides elements marked x-cloak until Alpine.js has loaded (no flash of hidden forms). -->
+  <style>[x-cloak] { display: none !important; }</style>
+
+  <!-- HTMX: lets HTML attributes like hx-post fetch and swap content from the server -->
+  <script src="https://cdn.jsdelivr.net/npm/htmx.org@2/dist/htmx.min.js"></script>
+  <!-- Alpine.js: small interactions (like hiding an alert) written as HTML attributes -->
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js"></script>
+</head>
+{# Pages behind the login fill body_attrs with the CSRF token header, so every
+   HTMX request from them carries it. The public home page leaves it empty. #}
+<body class="min-h-screen bg-base-200 font-sans antialiased" {% block body_attrs %}{% endblock %}>
+  {% block content %}{% endblock %}
+
+  <!-- Pop-up messages ("Sent start to agent-1") appear here, bottom-right. -->
+  {# max-lg:mb-24 lifts pop-ups above the agent page's Controls bar on phones. #}
+  <div id="toasts" class="toast toast-end z-50 max-lg:mb-24" aria-live="polite"></div>
+</body>
+</html>

@@ -1,0 +1,78 @@
+{# The Monitor section of an agent's page: the agent's latest "where my data
+   lives" view. It's one of:
+   - a PDF (e.g. a daily summary the agent regenerates on a schedule), shown
+     inside the page by the browser's own PDF viewer;
+   - a link (a Google Sheet, Grafana...), with "Show here" to try showing it
+     inside the page (many sites refuse, so the link always works too);
+   - nothing yet.
+
+   Every 10 seconds HTMX asks whether it changed (?version=...). The server
+   answers "204 No Content" if not, so a PDF you're reading isn't reloaded.
+   oob=True: sent alongside the settings header after a change in settings. #}
+<section id="monitor" class="card bg-base-100 shadow-xl" {% if oob %}hx-swap-oob="true"{% endif %}
+         hx-get="/dashboard/agents/{{ agent.id }}/monitor?version={{ version }}"
+         hx-trigger="every 10s" hx-swap="outerHTML"
+         x-data="{ embed: false }">
+  <div class="card-body gap-4">
+    <div class="flex flex-wrap items-center justify-between gap-2">
+      <h2 class="card-title">Monitor</h2>
+      <div class="flex flex-wrap items-center gap-2">
+        {% if agent.monitor_file_id %}
+        <a href="/dashboard/agents/{{ agent.id }}/monitor.pdf" target="_blank" class="btn btn-sm btn-primary">Open &#8599;</a>
+        {% elif agent.monitor_url %}
+        <button type="button" class="btn btn-sm" @click="embed = !embed"
+                x-text="embed ? 'Hide' : 'Show here'">Show here</button>
+        <a href="{{ agent.monitor_url }}" target="_blank" rel="noopener noreferrer" class="btn btn-sm btn-primary">Open &#8599;</a>
+        {% endif %}
+        {% with oob=False %}{% include "partials/monitor_pin.html" %}{% endwith %}
+      </div>
+    </div>
+
+    {% if agent.monitor_file_id or agent.monitor_url %}
+    <p class="text-sm">
+      <span class="font-medium">{{ agent.monitor_label or ("PDF" if agent.monitor_file_id else "Monitor") }}</span>
+      <span class="text-base-content/50">&middot;</span>
+      {% if agent.monitor_file_id %}
+      <span class="text-base-content/70 break-all">{{ agent.monitor_filename }}</span>
+      {% else %}
+      <a href="{{ agent.monitor_url }}" target="_blank" rel="noopener noreferrer" class="link break-all text-base-content/70">{{ agent.monitor_url }}</a>
+      {% endif %}
+      {% if agent.monitor_updated_at %}
+      <span class="text-base-content/50">&middot; updated {{ agent.monitor_updated_at.strftime("%Y-%m-%d %H:%M") }} UTC</span>
+      {% endif %}
+    </p>
+    {% endif %}
+
+    {% if agent.monitor_file_id %}
+    {# The browser shows the PDF with its own viewer (scroll, zoom, search).
+       ?v= makes the browser fetch the new file whenever the PDF is replaced. #}
+    <iframe src="/dashboard/agents/{{ agent.id }}/monitor.pdf?v={{ agent.monitor_file_id }}#view=FitH"
+            title="{{ agent.monitor_label or agent.monitor_filename }}"
+            class="h-[75vh] min-h-96 w-full rounded-box border border-base-300 bg-base-200"></iframe>
+    <p class="text-xs text-base-content/60">
+      Some phones only show the first page here. Use <strong>Open &#8599;</strong> to read the whole PDF.
+    </p>
+    {% elif agent.monitor_url %}
+    {# x-if only creates the frame (and loads the site) when "Show here" is on. #}
+    <template x-if="embed">
+      <div class="space-y-2">
+        <iframe src="{{ agent.monitor_url }}" title="{{ agent.monitor_label or 'Monitor' }}"
+                class="h-[32rem] w-full rounded-box border border-base-300 bg-white"
+                loading="lazy" referrerpolicy="no-referrer"
+                sandbox="allow-scripts allow-same-origin allow-popups allow-forms"></iframe>
+        <p class="text-xs text-base-content/60">
+          Blank or refused? That site doesn't allow being shown inside other pages, so use <strong>Open &#8599;</strong>.
+          For Google Sheets, <em>File &rarr; Share &rarr; Publish to web</em> gives a link that can be shown here.
+        </p>
+      </div>
+    </template>
+    {% else %}
+    <p class="text-sm text-base-content/60">
+      No monitor yet. The agent can show a PDF here (e.g. a daily summary) with
+      <code>set_monitor(Path("summary.pdf"))</code>, or a link to where its data lives with
+      <code>set_monitor("https://...")</code>. You can also add a link in Agent settings
+      (the gear next to the name). Only the latest one is shown.
+    </p>
+    {% endif %}
+  </div>
+</section>

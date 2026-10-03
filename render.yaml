@@ -1,0 +1,33 @@
+# Render Blueprint: tells Render what to create when you click "New > Blueprint".
+# Reference: https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: homepage
+    runtime: python
+    plan: free  # sleeps when idle; first visit after a while is slow
+    buildCommand: pip install -r requirements.txt
+    startCommand: fastapi run main.py --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.3
+      # Filled in automatically from the database defined below.
+      - key: DATABASE_URL
+        fromDatabase:
+          name: homepage-db
+          property: connectionString
+      # sync: false = Render asks you to type these in when creating the Blueprint.
+      # They are never stored in this file or in GitHub.
+      - key: DASHBOARD_USER
+        sync: false
+      - key: DASHBOARD_PASSWORD
+        sync: false
+      - key: AGENT_EDIT_PASSWORD  # needed to delete an agent or view/replace its key
+        sync: false
+      - key: KEY_ENCRYPTION_SECRET  # encrypts agents' API keys in the database
+        sync: false
+
+databases:
+  - name: homepage-db
+    plan: free  # check Render's current free-tier terms; free databases have expired before
+    databaseName: homepage
+    user: homepage

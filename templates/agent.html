@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+
+{% block title %}{{ agent.name }} · Agent Dashboard{% endblock %}
+
+{% block body_attrs %}hx-headers='{"X-CSRF-Token": "{{ csrf_token() }}"}'{% endblock %}
+
+{% block content %}
+{# Layout:
+   - Wide screens: Monitor, Outputs and Activity in the main column; Controls
+     in a right-hand column that stays in view while you scroll.
+   - Phones: the same sections, with Controls as a bar fixed to the bottom of
+     the screen (pb-32 leaves room for it at the end of the page).
+   Every Controls button posts a command for this agent; the reply pops up in a corner. #}
+<main class="mx-auto max-w-6xl px-4 py-10 pb-32 sm:py-14 lg:pb-14">
+
+  <div class="mb-8">
+    <a href="/dashboard?page={{ back_page }}" class="btn btn-ghost btn-sm -ml-3 mb-2">&larr; All agents</a>
+    {# Name, gear (agent settings pop-up), folder tags, and added/last seen. #}
+    {% include "partials/agent_header.html" %}
+  </div>
+
+  <div class="lg:grid lg:grid-cols-[minmax(0,1fr)_18rem] lg:items-start lg:gap-8">
+
+    <div class="min-w-0 space-y-8">
+      <!-- Monitor: the agent's latest PDF or link to where its data lives -->
+      {% with oob=False %}{% include "partials/monitor.html" %}{% endwith %}
+
+      <!-- Outputs: results the agent chose to share with output(content, category) -->
+      {% include "partials/outputs.html" %}
+
+      <!-- Activity: status lines from report(), plus output and monitor updates;
+           loads right away, then every 3 seconds -->
+      <section class="card bg-base-100 shadow-xl">
+        <div class="card-body gap-5">
+          <h2 class="card-title">Activity</h2>
+          <div hx-get="/dashboard/agents/{{ agent.id }}/events" hx-trigger="load, every 3s">
+            <div class="flex justify-center py-8">
+              <span class="loading loading-dots loading-lg"></span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Controls, wide screens: a right-hand column that stays in view (sticky) -->
+    <aside class="hidden lg:sticky lg:top-6 lg:block" aria-label="Controls">
+      <section class="card bg-base-100 shadow-xl">
+        <div class="card-body gap-4">
+          <h2 class="card-title">Controls</h2>
+          <div class="grid grid-cols-2 gap-2">
+            <button class="btn btn-success"
+                    hx-post="/dashboard/agents/{{ agent.id }}/command"
+                    hx-vals='{"command": "start"}'
+                    hx-target="#toasts" hx-swap="beforeend">Start</button>
+            <button class="btn btn-warning"
+                    hx-post="/dashboard/agents/{{ agent.id }}/command"
+                    hx-vals='{"command": "pause"}'
+                    hx-target="#toasts" hx-swap="beforeend">Pause</button>
+          </div>
+          {% if agent.accepts_messages %}
+          <!-- hx-on clears the text box after the server says the send worked -->
+          <form class="space-y-2"
+                hx-post="/dashboard/agents/{{ agent.id }}/command"
+                hx-vals='{"command": "message"}'
+                hx-target="#toasts" hx-swap="beforeend"
+                hx-on::after-request="if (event.detail.successful) this.reset()">
+            <textarea name="text" required rows="3" autocomplete="off"
+                      placeholder="Send a message to the agent…"
+                      class="textarea w-full" aria-label="Message to the agent"></textarea>
+            <button type="submit" class="btn btn-primary w-full">Send</button>
+          </form>
+          {% else %}
+          {# Messages stay off until the agent says it accepts them. #}
+          <div class="space-y-2" aria-disabled="true">
+            <textarea rows="3" disabled placeholder="Messages are off for this agent"
+                      class="textarea w-full" aria-label="Message to the agent (off)"></textarea>
+            <button type="button" class="btn w-full" disabled>Send</button>
+            <p class="text-xs text-base-content/60">
+              This agent hasn't said it accepts messages. Its code can switch them on with
+              <code>accept_messages(...)</code> from the connector.
+            </p>
+          </div>
+          {% endif %}
+          <p class="text-xs text-base-content/60">
+            <strong>Pause</strong> holds the agent's outputs and monitor updates until you press
+            <strong>Start</strong>. Agents that use <code>wait_if_paused()</code> also stop working.
+          </p>
+        </div>
+      </section>
+    </aside>
+  </div>
+</main>
+
+<!-- Reloads the page if the agent starts or stops accepting messages, so the
+     message box switches on or off (the server answers "nothing changed" otherwise). -->
+<div hx-get="/dashboard/agents/{{ agent.id }}/messages-ready?ready={{ 'true' if agent.accepts_messages else 'false' }}"
+     hx-trigger="every 5s" hx-swap="none"></div>
+
+<!-- Controls, phones: a bar fixed to the bottom of the screen.
+     The message box opens above the buttons when you tap "Message". -->
+<div class="fixed inset-x-0 bottom-0 z-30 border-t border-base-300 bg-base-100/95 p-3 shadow-2xl backdrop-blur lg:hidden"
+     x-data="{ writing: false }" aria-label="Controls">
+  {% if agent.accepts_messages %}
+  <form x-show="writing" x-cloak class="mb-2 flex gap-2"
+        hx-post="/dashboard/agents/{{ agent.id }}/command"
+        hx-vals='{"command": "message"}'
+        hx-target="#toasts" hx-swap="beforeend"
+        hx-on::after-request="if (event.detail.successful) this.reset()">
+    <input type="text" name="text" required autocomplete="off" x-ref="message"
+           placeholder="Send a message to the agent…" class="input input-sm flex-1"
+           aria-label="Message to the agent">
+    <button type="submit" class="btn btn-primary btn-sm">Send</button>
+  </form>
+  {% endif %}
+  <div class="grid grid-cols-3 gap-2">
+    <button class="btn btn-success btn-sm"
+            hx-post="/dashboard/agents/{{ agent.id }}/command"
+            hx-vals='{"command": "start"}'
+            hx-target="#toasts" hx-swap="beforeend">Start</button>
+    <button class="btn btn-warning btn-sm"
+            hx-post="/dashboard/agents/{{ agent.id }}/command"
+            hx-vals='{"command": "pause"}'
+            hx-target="#toasts" hx-swap="beforeend">Pause</button>
+    {% if agent.accepts_messages %}
+    <button type="button" class="btn btn-sm" :class="{ 'btn-active': writing }"
+            @click="writing = !writing; $nextTick(() => writing && $refs.message.focus())">Message</button>
+    {% else %}
+    <button type="button" class="btn btn-sm" disabled title="This agent hasn't said it accepts messages">Message</button>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

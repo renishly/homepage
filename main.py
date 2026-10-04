@@ -36,16 +36,23 @@ from db import (
     utc_now,
 )
 from security import (
+    SESSION_COOKIE,
+    SESSION_LIFETIME,
     KeyEncryptionNotConfigured,
+    cookie_is_secure,
     csrf_token,
     decrypt_api_key,
     edit_password_matches,
     encrypt_api_key,
+    end_login,
+    find_login,
     generate_api_key,
     hash_api_key,
+    login_details_match,
     require_agent,
     require_csrf,
     require_user,
+    start_login,
 )
 
 # Build paths from this file's location so the app works no matter which
@@ -87,6 +94,19 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Homepage", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def never_store_private_pages(request: Request, call_next):
+    """Tell browsers (and anything in between) never to keep a copy of a
+    dashboard page or an API reply. Otherwise a restored tab or the Back
+    button could show a private page without asking the server, and so
+    without the login. Replies that set their own caching keep it (agents'
+    files never change, so those may stay in your own browser's cache)."""
+    response = await call_next(request)
+    if request.url.path.startswith(("/dashboard", "/api", "/login", "/logout")):
+        response.headers.setdefault("Cache-Control", "no-store")
+    return response
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 # Lets dashboard templates write {{ csrf_token() }} (see security.py).
@@ -724,7 +744,79 @@ def home(request: Request):
 
 
 # ---------------------------------------------------------------------------
-# Dashboard: the grid and folders (needs your username and password)
+# Signing in and out (see "Dashboard login" in security.py)
+# ---------------------------------------------------------------------------
+
+
+def safe_next(next_page: str | None) -> str:
+    """Where to go after signing in: only a dashboard page on this site."""
+    if next_page and next_page.startswith("/dashboard") and "//" not in next_page and "\\" not in next_page:
+        return next_page
+    return "/dashboard"
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_page(
+    request: Request,
+    next: str | None = None,
+    signed_out: bool = False,
+    session: Session = Depends(get_session),
+):
+    """The login form. Already signed in on this device? Straight to the dashboard."""
+    if find_login(session, request.cookies.get(SESSION_COOKIE)):
+        return RedirectResponse(safe_next(next), status_code=303)
+    return templates.TemplateResponse(
+        request, "login.html", {"next": safe_next(next), "signed_out": signed_out, "error": None}
+    )
+
+
+@app.post("/login", response_class=HTMLResponse)
+def login(
+    request: Request,
+    username: str = Form(""),
+    password: str = Form(""),
+    next: str = Form("/dashboard"),
+    session: Session = Depends(get_session),
+):
+    """Check the username and password, then sign this device in for a day."""
+    if not login_details_match(username, password):
+        return templates.TemplateResponse(
+            request,
+            "login.html",
+            {"next": safe_next(next), "signed_out": False, "username": username,
+             "error": "Wrong username or password."},
+            status_code=401,
+        )
+    token = start_login(session, username, request.headers.get("user-agent"))
+    response = RedirectResponse(safe_next(next), status_code=303)
+    response.set_cookie(
+        SESSION_COOKIE,
+        token,
+        max_age=int(SESSION_LIFETIME.total_seconds()),
+        httponly=True,  # page scripts can't read it
+        samesite="lax",  # other websites' requests don't carry it
+        secure=cookie_is_secure(request),  # https only, except on this computer
+        path="/",
+    )
+    return response
+
+
+@app.post("/logout", dependencies=[Depends(require_csrf)])
+def logout(
+    request: Request,
+    everywhere: bool = Form(False),
+    session: Session = Depends(get_session),
+):
+    """Sign this device out (or every device, with "Sign out all devices")."""
+    end_login(session, request.cookies.get(SESSION_COOKIE), everywhere=everywhere)
+    response = RedirectResponse("/login?signed_out=true", status_code=303)
+    response.delete_cookie(SESSION_COOKIE, path="/", httponly=True, samesite="lax",
+                           secure=cookie_is_secure(request))
+    return response
+
+
+# ---------------------------------------------------------------------------
+# Dashboard: the grid and folders (needs a signed-in browser)
 # ---------------------------------------------------------------------------
 
 

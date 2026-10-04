@@ -41,6 +41,7 @@ These are the tables. Each side reads what the other writes:
 - **Folder** and **AgentFolderLink**: your folders, and which agents are tagged with which folder. An agent can be in several folders.
 - **Output** and **OutputFile**: results an agent chose to share with `output(content, category)`. Files are stored in the database itself, up to 5 MB each, so they survive restarts on any host.
 - **CategoryNotification**: which output categories have the bell turned on.
+- **LoginSession**: one row per signed-in device (only a fingerprint of its token), deleted when it logs out.
 
 **Each agent has its own API key.** The agent sends it in the `X-API-Key` header, and the site uses it to work out which agent is calling. That's why renaming an agent never disconnects it.
 
@@ -56,9 +57,10 @@ Here's the flow:
 |---|---|
 | `main.py` | All the routes (pages, dashboard, API). |
 | `db.py` | Database connection and the tables (`Agent`, `Folder`, `AgentFolderLink`, `Event`, `Command`, `Output`, `OutputFile`, `CategoryNotification`). |
-| `security.py` | The dashboard login check, CSRF protection, the per-agent API-key check, key encryption, and the agent editing password check. |
+| `security.py` | The dashboard login (sign-in sessions), CSRF protection, the per-agent API-key check, key encryption, and the agent editing password check. |
 | `static/theme.css` | The site's look: the "codepaper" theme (black IBM Plex Mono text on `#ffff83` yellow paper, cards with thin black borders and hard shadows, vibrant yellow `#ffe600` hovers, a tilted background grid that drifts and rushes forward on each page load) and all the animations (page transitions, a typed home title, pressing buttons, snapping pop-ups, sliding toasts, a pulsing "online" light). Change colours here: they're the variables at the top. Animations switch off for visitors who ask their device to reduce motion. |
 | `templates/` | The HTML pages (Jinja2). |
+| `templates/login.html` | The dashboard's login page. |
 | `templates/dashboard.html` | The grid page, with the folder sidebar and the Add Agent window. |
 | `templates/agent.html` | One agent's page. |
 | `templates/partials/` | Pieces the pages reuse or refresh: the grid (`agent_grid.html`), the Add Agent form and its result (`add_agent_form.html`, `agent_created.html`), the agent's name, tags and settings pop-up (`agent_header.html`), its running/paused badge (`run_state.html`), a shown or replaced API key (`api_key.html`), the two connection values (`connection_values.html`), the Outputs section (`outputs.html`, with its Filter rows `outputs_options.html`, list `outputs_list.html`, Filter button text `outputs_summary.html`, and `output_macros.html` for showing each kind of output), the Monitor section and its pin button (`monitor.html`, `monitor_pin.html`), and the Activity list (`events.html`). |
@@ -118,7 +120,7 @@ fastapi dev main.py
 Then visit:
 
 - <http://127.0.0.1:8000/>: the home page.
-- <http://127.0.0.1:8000/dashboard>: the dashboard. Your browser will ask for your `DASHBOARD_USER` and `DASHBOARD_PASSWORD`.
+- <http://127.0.0.1:8000/dashboard>: the dashboard. It sends you to the login page first; sign in with your `DASHBOARD_USER` and `DASHBOARD_PASSWORD`.
 - <http://127.0.0.1:8000/docs>: interactive API docs. Click **Authorize** and paste an agent's API key to try the API by hand.
 
 `fastapi dev` restarts automatically when you edit a file. Locally, data is stored in `local.db` (a SQLite file).
@@ -241,6 +243,14 @@ Use a different `category` for each kind of result, for example `"articles"`, `"
     - Closing settings clears any key shown on the page.
   - **Danger zone**: **Delete agent** first asks "are you sure", then needs your `AGENT_EDIT_PASSWORD`. Deleting removes the agent, its outputs (and their files), its activity log and its pending commands, and its key stops working.
 
+**Signing in:** the dashboard has its own login page. Each device (each browser) signs in separately, so signing in on your laptop never lets your phone in.
+- A sign-in lasts **one day**, then that device has to sign in again. An open page notices within a few seconds and goes to the login page, then back to where you were.
+- **Log out** (top right of the dashboard) signs out this device straight away. **Sign out all devices** (in the ⓘ window) signs out every device, for example if you signed in on a borrowed one.
+- Changing `DASHBOARD_USER` or `DASHBOARD_PASSWORD` (and restarting) also signs every device out.
+- Each sign-in is a long random token in a cookie that page scripts can't read, that other websites' requests don't carry, and that only travels over https on the deployed site. The database stores only its fingerprint, in the `LoginSession` table.
+- Browsers are told never to store dashboard pages, so Back after logging out shows the login page, not an old copy.
+- Agents don't use this login at all: their API key is all they need.
+
 **CSRF protection:** every dashboard page carries a secret token, and every button and form sends it back. This stops other websites from using your logged-in browser to press dashboard buttons for you. If you ever see "Missing or invalid CSRF token", reload the page. The token changes whenever `DASHBOARD_PASSWORD` changes.
 
 Agents are listed A–Z, ignoring upper/lower case. Each page holds 9 cells, and the Add Agent card counts as one of them.
@@ -348,7 +358,7 @@ If you ran an earlier version of this project and have an old `local.db`, delete
 
 - **Instant updates:** replace the 3-second refresh with Server-Sent Events. HTMX has an SSE extension for this.
 - **Production CSS:** the Tailwind browser build is great for getting started, but it runs in every visitor's browser. Build a small CSS file ahead of time instead with [`pytailwindcss`](https://github.com/timonweb/pytailwindcss).
-- **A real login page:** swap the browser's Basic Auth popup for a proper login form with sessions and a logout button.
+- **Limit login attempts:** the login page doesn't slow down repeated wrong passwords yet, so use a long, unique `DASHBOARD_PASSWORD`.
 - **Tidy up old outputs:** agents can already delete their own old outputs (see "Reading other agents' data, and deleting your own"). A dashboard-side automatic clean-up, such as keeping only the last 30 days, would cover agents that don't.
 - **Limit request rates:** an agent (or a leaked key) can send unlimited requests; a per-agent rate limit would stop one from flooding the database.
 - **Discord notifications:** a bot that reads the `CategoryNotification` table and posts when a marked category gets a new output.

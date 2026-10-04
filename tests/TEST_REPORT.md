@@ -692,6 +692,27 @@ This was run when agents still identified themselves by `AGENT_NAME`.
 - **Security:** changing it needs the dashboard login and the CSRF token. Agents can read descriptions but not change them.
 - **Tests:** 5 new tests; all 280 pass.
 
+## 3r. Long agent names on grid cards
+
+**Result: PASSED**, checked in the browser at 800 px and 1440 px wide.
+
+- **Bug:** a long name shared its line with the status badges, which never shrink, so "Quarterly Earnings Research Summariser Agent" with three folder tags showed as "Qua", with no "…" (daisyUI's title style blocks it).
+- **Fix:** the name now wraps onto up to two lines (then "…"; hovering shows it all), and the badges move to the next line, on the right, when they don't fit. Short names look as before.
+
+## 3s. Each device must sign in (login page replaces the pop-up)
+
+**Result: PASSED** (automated tests and the browser; not yet checked on the live site).
+
+- **Report:** after one device logged in, another could view the dashboard without logging in.
+- **Investigation:** the live site refused every dashboard page without a login (401), and Cloudflare in front of Render reported `DYNAMIC` (not caching pages). So the server wasn't letting devices in. The cause was the browser login pop-up (HTTP Basic auth): it has no logout, browsers keep resending the password until they fully quit (phones rarely do), and synced password managers can bring it to other devices. Pages also didn't tell browsers not to store them.
+- **Fix:**
+  - A login page (`/login`) with one-day sign-ins per device, stored as fingerprints in a new `LoginSession` table. Log out, and "Sign out all devices", end sign-ins at once; changing the dashboard password ends them all. The pop-up is gone: even the right password sent the old way is refused.
+  - The cookie is HttpOnly, SameSite=Lax, and Secure on the deployed site (not on `localhost`, where browsers would refuse it).
+  - Every dashboard, API and login reply says `Cache-Control: no-store`.
+- **In the browser:** opening an agent page signed out went to the login page and back after signing in. Deleting the sign-in while the page was open sent it to the login page within its 3-second refresh. Log out worked, and Back afterwards showed the login page.
+- **Agents are unaffected:** the API still needs only the agent's key.
+- **Tests:** 18 new tests (sign-in, wrong passwords, separate devices, logout, sign out all, expiry, password change, redirects for pages and HTMX, safe return addresses, cookie flags, no-store); all 299 pass.
+
 ## 4. Known limitations and things not verified
 
 - **Render:** deployment was not tested. Only the user can do that, following the README. `render.yaml` parses as valid YAML and its field names were checked against Render's Blueprint reference, but Render itself has not validated it.
@@ -700,6 +721,7 @@ This was run when agents still identified themselves by `AGENT_NAME`.
 - **Timestamps:** SQLite stores them without time-zone information. They are written in UTC and labelled UTC on the dashboard.
 - **Polling:** the grid and the activity log reload every 3 seconds, so new events can take up to 3 seconds to appear.
 - **Refreshing grid:** because the grid is redrawn every 3 seconds, a button that is mid-click exactly when the grid refreshes can miss the click. Clicking again works. Server-Sent Events (see the README's next steps) would avoid this.
+- **No login attempt limit:** wrong passwords on the login page aren't slowed down or blocked yet. Use a long, unique `DASHBOARD_PASSWORD`.
 - **CSRF token never changes:** the token stays the same until `DASHBOARD_PASSWORD` changes, so anyone who sees a dashboard page's source could reuse it until then. They would still need your login to do anything.
 - **No guessing limit:** wrong agent editing passwords are not rate-limited. Use one that's hard to guess.
 - **Encryption secret:** if `KEY_ENCRYPTION_SECRET` is lost or changed, stored keys can't be viewed any more (the agents keep working). Replace key fixes each agent.

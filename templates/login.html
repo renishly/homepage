@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+
+{% block title %}Sign in · Agent Dashboard{% endblock %}
+
+{% block content %}
+{# The dashboard's login form. Signing in here lets only this browser into
+   the dashboard, for a day (see "Dashboard login" in security.py). #}
+<div class="hero min-h-screen">
+  <div class="hero-content w-full max-w-sm px-4">
+    <div class="card bg-base-100 w-full shadow-xl">
+      <form method="post" action="/login" class="card-body gap-4">
+        <h1 class="text-2xl font-bold tracking-tight">Sign in</h1>
+        <p class="text-sm text-base-content/60">Agent Dashboard</p>
+
+        {% if signed_out %}
+        <div role="status" class="alert alert-success alert-soft text-sm">You're signed out on this device.</div>
+        {% endif %}
+        {% if error %}
+        <div role="alert" class="alert alert-error alert-soft text-sm">{{ error }}</div>
+        {% endif %}
+
+        <input type="hidden" name="next" value="{{ next }}">
+        <fieldset class="fieldset">
+          <legend class="fieldset-legend">Username</legend>
+          <input type="text" name="username" value="{{ username or '' }}" required autocomplete="username"
+                 autocapitalize="none" spellcheck="false" class="input w-full" autofocus>
+        </fieldset>
+        <fieldset class="fieldset">
+          <legend class="fieldset-legend">Password</legend>
+          <input type="password" name="password" required autocomplete="current-password" class="input w-full">
+        </fieldset>
+        <button type="submit" class="btn btn-primary w-full">Sign in</button>
+        <p class="text-xs text-base-content/50">You stay signed in on this device for a day, or until you log out.</p>
+        <a href="/" class="link text-sm">&larr; Home</a>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

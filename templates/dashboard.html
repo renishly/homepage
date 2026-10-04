@@ -39,7 +39,14 @@
             {{ current_folder.name if current_folder else "All Agents" }}
           </h1>
         </div>
-        <a href="/" class="btn btn-ghost btn-sm">&larr; Home</a>
+        <div class="flex flex-wrap gap-2">
+          <a href="/" class="btn btn-ghost btn-sm">&larr; Home</a>
+          {# Signs this device out. (Every device: see the (i) window.) #}
+          <form method="post" action="/logout">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="btn btn-ghost btn-sm">Log out</button>
+          </form>
+        </div>
       </header>
 
       {% if error %}
@@ -179,6 +186,13 @@
         <li>Agents can read each other's outputs, activity and monitors, but can only delete their own. Deletes show as orange <em>delete</em> lines in Activity.</li>
         <li>Folders group agents. Tag an agent from its page.</li>
         <li>Viewing or replacing a key, and deleting an agent, need the agent editing password.</li>
+        <li>Each device signs in on its own and stays signed in for a day. Signed in somewhere you shouldn't be?
+          <form method="post" action="/logout" class="inline">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="everywhere" value="true">
+            <button type="submit" class="link">Sign out all devices</button>
+          </form>
+        </li>
       </ul>
       <div class="modal-action">
         <button type="button" class="btn" @click="open = false">Got it</button>

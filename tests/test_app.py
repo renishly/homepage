@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 from sqlmodel import SQLModel, select
 
-from conftest import TEST_AUTH, TEST_EDIT_PASSWORD
+from conftest import TEST_AUTH, TEST_EDIT_PASSWORD, TEST_LOGIN
 from db import (
     Agent,
     AgentFolderLink,
@@ -22,12 +22,13 @@ from db import (
     Command,
     Event,
     Folder,
+    LoginSession,
     Output,
     OutputFile,
     normalize_database_url,
     utc_now,
 )
-from security import csrf_token, decrypt_api_key, hash_api_key
+from security import SESSION_COOKIE, csrf_token, decrypt_api_key, hash_api_key
 
 # --- Helpers ---------------------------------------------------------------
 
@@ -174,13 +175,16 @@ def test_dashboard_requires_login(client, session, path):
     agent_id = add_agent(client, session)
     response = client.get(path.format(id=agent_id))
     assert response.status_code == 401
-    assert response.headers["WWW-Authenticate"] == "Basic"
+    # No browser login pop-up: that kind of login can't be signed out of.
+    assert "WWW-Authenticate" not in response.headers
 
 
 @pytest.mark.parametrize("path", DASHBOARD_GET_ROUTES)
-def test_dashboard_rejects_wrong_password(client, session, path):
+def test_dashboard_ignores_popup_logins(client, session, path):
+    # Even the right username and password in the old pop-up form don't get in:
+    # only a browser signed in on the login page does.
     agent_id = add_agent(client, session)
-    response = client.get(path.format(id=agent_id), auth=("test-user", "wrong-password"))
+    response = client.get(path.format(id=agent_id), auth=("test-user", "test-password"))
     assert response.status_code == 401
 
 
@@ -204,8 +208,9 @@ def test_dashboard_actions_require_login(client, session, path, data):
 
 def test_dashboard_denied_when_password_env_is_empty(client, monkeypatch):
     monkeypatch.setenv("DASHBOARD_PASSWORD", "")
-    response = client.get("/dashboard", auth=("test-user", ""))
-    assert response.status_code == 401
+    response = client.post("/login", data={"username": "test-user", "password": ""}, follow_redirects=False)
+    assert response.status_code in (401, 422) and SESSION_COOKIE not in response.cookies
+    assert client.get("/dashboard", auth=TEST_AUTH).status_code == 401  # earlier sign-ins end too
 
 
 def test_unknown_agent_and_folder_return_404(client):
@@ -2281,3 +2286,140 @@ def test_agents_can_read_each_others_descriptions(client, session):
     listed = client.get("/api/agents", headers=headers_for("agent-1")).json()
     assert {a["name"]: a["description"] for a in listed} == {"agent-1": None, "agent-2": "Makes PDF reports."}
     assert client.get("/api/agents/agent-2", headers=headers_for("agent-1")).json()["description"] == "Makes PDF reports."
+
+
+def test_private_pages_are_never_stored_by_browsers(client, session):
+    agent_id = add_agent(client, session)
+    for path in ("/dashboard", "/dashboard/grid", f"/dashboard/agents/{agent_id}",
+                 f"/dashboard/agents/{agent_id}/events"):
+        assert client.get(path, auth=TEST_AUTH).headers["cache-control"] == "no-store"
+        assert client.get(path).headers["cache-control"] == "no-store"  # the login refusal too
+    assert client.get("/api/agents", headers=headers_for("agent-1")).headers["cache-control"] == "no-store"
+    assert "no-store" not in client.get("/").headers.get("cache-control", "")  # the public home page
+
+
+
+# --- Signing in and out -----------------------------------------------------
+
+
+def sign_in(client, **extra):
+    """Sign in on the login page; returns the response (not followed)."""
+    return client.post("/login", data={**TEST_LOGIN, **extra}, follow_redirects=False)
+
+
+def as_device(token):
+    """Headers for a request from a browser holding this session cookie."""
+    return {"Cookie": f"{SESSION_COOKIE}={token}"}
+
+
+def test_login_page_signs_a_device_in(client, session):
+    assert "Sign in" in client.get("/login").text
+    response = sign_in(client)
+    assert response.status_code == 303 and response.headers["location"] == "/dashboard"
+    cookie = response.headers["set-cookie"]
+    assert "HttpOnly" in cookie and "SameSite=lax" in cookie and "Max-Age=86400" in cookie
+    assert "Secure" in cookie  # https only on a deployed site
+    token = response.cookies[SESSION_COOKIE]
+    assert client.get("/dashboard", headers=as_device(token)).status_code == 200
+    # Only a fingerprint of the token is stored.
+    stored = session.exec(select(LoginSession)).all()
+    assert all(token not in row.token_hash for row in stored)
+
+
+def test_wrong_login_is_refused(client):
+    response = sign_in(client, password="wrong")
+    assert response.status_code == 401 and "Wrong username or password" in response.text
+    assert SESSION_COOKIE not in response.cookies
+    assert 'value="test-user"' in response.text  # the username is kept
+    assert sign_in(client, username="someone-else").status_code == 401
+
+
+def test_each_device_signs_in_separately(client):
+    # Signing in on one device doesn't let a second one in.
+    first = sign_in(client).cookies[SESSION_COOKIE]
+    client.cookies.clear()
+    assert client.get("/dashboard", headers=as_device(first)).status_code == 200
+    assert client.get("/dashboard").status_code == 401
+    assert client.get("/dashboard", headers=as_device("made-up-token")).status_code == 401
+
+
+def test_logging_out_ends_only_this_devices_sign_in(client):
+    phone = sign_in(client).cookies[SESSION_COOKIE]
+    client.cookies.clear()
+    response = client.post("/logout", auth=TEST_AUTH, follow_redirects=False)
+    assert response.headers["location"] == "/login?signed_out=true"
+    assert SESSION_COOKIE in response.headers["set-cookie"] and "Max-Age=0" in response.headers["set-cookie"]
+    assert client.get("/dashboard", auth=TEST_AUTH).status_code == 401  # this device: out at once
+    assert client.get("/dashboard", headers=as_device(phone)).status_code == 200  # the other: still in
+    assert "signed out on this device" in client.get("/login?signed_out=true").text
+
+
+def test_sign_out_all_devices(client):
+    phone = sign_in(client).cookies[SESSION_COOKIE]
+    client.cookies.clear()
+    client.post("/logout", data={"everywhere": "true"}, auth=TEST_AUTH)
+    assert client.get("/dashboard", auth=TEST_AUTH).status_code == 401
+    assert client.get("/dashboard", headers=as_device(phone)).status_code == 401
+
+
+def test_logout_needs_the_csrf_token(client):
+    del client.headers["X-CSRF-Token"]
+    assert client.post("/logout", auth=TEST_AUTH).status_code == 403
+    assert client.get("/dashboard", auth=TEST_AUTH).status_code == 200  # still signed in
+
+
+def test_sign_in_expires_after_a_day(client, session):
+    for login in session.exec(select(LoginSession)).all():
+        login.expires_at = utc_now() - timedelta(seconds=1)
+        session.add(login)
+    session.commit()
+    assert client.get("/dashboard", auth=TEST_AUTH).status_code == 401
+
+
+def test_changing_the_password_signs_everyone_out(client, monkeypatch):
+    monkeypatch.setenv("DASHBOARD_PASSWORD", "a-new-password")
+    assert client.get("/dashboard", auth=TEST_AUTH).status_code == 401
+
+
+def test_browsers_are_sent_to_the_login_page_and_back(client, session):
+    agent_id = add_agent(client, session)
+    page = f"/dashboard/agents/{agent_id}"
+    response = client.get(page, headers={"Accept": "text/html"}, follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == f"/login?next=%2Fdashboard%2Fagents%2F{agent_id}"
+    assert f'value="{page}"' in client.get(response.headers["location"]).text
+    back = client.post("/login", data={**TEST_LOGIN, "next": page}, follow_redirects=False)
+    assert back.headers["location"] == page
+
+
+def test_htmx_requests_are_sent_to_the_login_page(client, session):
+    agent_id = add_agent(client, session)
+    response = client.get(f"/dashboard/agents/{agent_id}/events", headers={
+        "HX-Request": "true", "HX-Current-URL": f"http://testserver/dashboard/agents/{agent_id}"})
+    assert response.status_code == 401
+    assert response.headers["HX-Redirect"] == f"/login?next=%2Fdashboard%2Fagents%2F{agent_id}"
+
+
+@pytest.mark.parametrize("next_page", ["https://evil.example", "//evil.example", "/dashboard//evil.example", "/"])
+def test_login_only_returns_to_dashboard_pages(client, next_page):
+    assert sign_in(client, next=next_page).headers["location"] == "/dashboard"
+
+
+def test_signed_in_device_skips_the_login_page(client):
+    response = client.get("/login", auth=TEST_AUTH, follow_redirects=False)
+    assert response.status_code == 303 and response.headers["location"] == "/dashboard"
+
+
+def test_cookie_works_over_plain_http_on_this_computer(client):
+    local = client.post("http://localhost/login", data=TEST_LOGIN, follow_redirects=False)
+    assert "Secure" not in local.headers["set-cookie"]
+
+
+def test_agents_still_use_only_their_key(client, session):
+    add_agent(client, session)
+    assert post_event(client).status_code == 201  # no dashboard sign-in needed
+
+
+def test_dashboard_shows_log_out_and_sign_out_all(client):
+    page = client.get("/dashboard", auth=TEST_AUTH).text
+    assert 'action="/logout"' in page and "Sign out all devices" in page

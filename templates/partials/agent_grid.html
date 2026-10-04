@@ -16,8 +16,12 @@
        x-data @click="window.location.href = '/dashboard/agents/{{ agent.id }}'">
     <div class="card-body gap-4">
 
-      <div class="flex items-center justify-between gap-3">
-        <a href="/dashboard/agents/{{ agent.id }}" class="card-title truncate">{{ agent.name }}</a>
+      {# The name gets up to two lines (then "..."; hover shows it all). If the
+         badges don't fit beside it, they wrap onto the next line, on the right. #}
+      <div class="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <a href="/dashboard/agents/{{ agent.id }}" title="{{ agent.name }}"
+           class="card-title min-w-0 max-w-full line-clamp-2 break-words">{{ agent.name }}</a>
+        <div class="ml-auto flex shrink-0 items-center gap-1">
         {% if agent.paused %}
         <span class="badge badge-warning badge-sm shrink-0" title="Paused from the dashboard">paused</span>
         {% endif %}
@@ -28,6 +32,7 @@
         {% else %}
         <span class="badge badge-ghost badge-sm shrink-0">never connected</span>
         {% endif %}
+        </div>
       </div>
 
       {% if cell.folders %}

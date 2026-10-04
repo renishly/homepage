@@ -27,9 +27,24 @@ from sqlmodel import Session, SQLModel, create_engine  # noqa: E402
 
 from db import get_session  # noqa: E402
 from main import app  # noqa: E402
-from security import csrf_token  # noqa: E402
+from security import SESSION_COOKIE, csrf_token  # noqa: E402
 
-TEST_AUTH = ("test-user", "test-password")
+TEST_LOGIN = {"username": "test-user", "password": "test-password"}
+
+
+class SignedIn:
+    """Pass auth=TEST_AUTH to send a request from a signed-in browser.
+
+    The client fixture signs in once per test on /login and keeps the session
+    cookie's token here; for each auth=TEST_AUTH request (and any redirect it
+    follows) the cookie is put in the client's cookie jar. Requests without
+    auth=TEST_AUTH come from a browser that isn't signed in.
+    """
+
+    token: str | None = None
+
+
+TEST_AUTH = SignedIn()
 TEST_EDIT_PASSWORD = "test-edit-password"
 
 
@@ -54,5 +69,22 @@ def client(session):
         # Send the CSRF token with every request, like the dashboard pages do.
         # Tests that check CSRF protection remove or change this header.
         test_client.headers["X-CSRF-Token"] = csrf_token()
+        # Sign in, and keep the cookie only in TEST_AUTH (not in the client).
+        response = test_client.post("/login", data=TEST_LOGIN, follow_redirects=False)
+        TEST_AUTH.token = response.cookies[SESSION_COOKIE]
+        test_client.cookies.clear()
+
+        send = test_client.request
+
+        def request(method, url, *args, auth=None, **kwargs):
+            if auth is not TEST_AUTH:
+                return send(method, url, *args, **({"auth": auth} if auth is not None else {}), **kwargs)
+            test_client.cookies.set(SESSION_COOKIE, TEST_AUTH.token)
+            try:
+                return send(method, url, *args, **kwargs)
+            finally:
+                test_client.cookies.clear()
+
+        test_client.request = request  # get(), post()... all go through request()
         yield test_client
     app.dependency_overrides.clear()

@@ -153,6 +153,25 @@ class CategoryNotification(SQLModel, table=True):
     category: str = Field(primary_key=True)
 
 
+class LoginSession(SQLModel, table=True):
+    """One signed-in device (a browser that logged in on the login page).
+
+    The browser keeps a long random token in a cookie; only its fingerprint
+    (SHA-256) is stored here, so a copied database can't be used to sign in.
+    Logging out deletes the row, which signs that device out straight away.
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    token_hash: str = Field(unique=True, index=True)
+    username: str
+    # Changes when DASHBOARD_USER or DASHBOARD_PASSWORD changes, so changing
+    # the password signs every device out.
+    login_check: str
+    user_agent: str | None = None  # which browser, e.g. "Mozilla/5.0 (iPhone...)"
+    created_at: datetime = Field(default_factory=utc_now)
+    expires_at: datetime
+
+
 def normalize_database_url(url: str) -> str:
     """Make sure a Postgres URL uses the psycopg (version 3) driver.
 

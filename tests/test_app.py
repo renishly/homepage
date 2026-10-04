@@ -2219,3 +2219,65 @@ def test_connector_reads_survive_unreachable_dashboard(monkeypatch, capsys):
     assert connector.read_monitor("me") is None
     assert connector.delete_activity(everything=True) is None
     assert "can't reach" in capsys.readouterr().out
+
+
+# --- Agent descriptions -----------------------------------------------------
+
+
+def test_description_can_be_given_when_adding_an_agent(client, session):
+    response = client.post(
+        "/dashboard/agents",
+        data={"name": "news-bot", "api_key": key_for("news-bot"), "description": "  Finds AI news.\r\n\r\n\r\n\r\nDaily.  "},
+        auth=TEST_AUTH,
+    )
+    assert "Agent added" in response.text
+    agent = session.exec(select(Agent).where(Agent.name == "news-bot")).one()
+    assert agent.description == "Finds AI news.\n\nDaily."  # trimmed, blank lines squeezed
+    page = client.get(f"/dashboard/agents/{agent.id}", auth=TEST_AUTH).text
+    assert "Finds AI news." in page
+
+
+def test_description_is_optional_and_too_long_is_refused(client, session):
+    agent_id = add_agent(client, session, "plain")
+    assert session.get(Agent, agent_id).description is None
+    response = client.post(
+        "/dashboard/agents",
+        data={"name": "wordy", "api_key": key_for("wordy"), "description": "x" * 1001},
+        auth=TEST_AUTH,
+    )
+    assert "at most 1000 characters" in response.text
+    assert 'value="wordy"' in response.text and "x" * 1001 in response.text  # what was typed is kept
+    assert session.exec(select(Agent).where(Agent.name == "wordy")).first() is None
+
+
+def test_description_can_be_changed_in_settings(client, session):
+    agent_id = add_agent(client, session)
+    url = f"/dashboard/agents/{agent_id}/description"
+    response = client.post(url, data={"description": "Summarises <b>reports</b>."}, auth=TEST_AUTH)
+    assert "Summarises &lt;b&gt;reports&lt;/b&gt;." in response.text  # escaped, not run as HTML
+    assert "modal-open" in response.text  # settings stay open
+    session.refresh(session.get(Agent, agent_id))
+    assert session.get(Agent, agent_id).description == "Summarises <b>reports</b>."
+    response = client.post(url, data={"description": "y" * 1001}, auth=TEST_AUTH)
+    assert "at most 1000 characters" in response.text
+    assert session.get(Agent, agent_id).description == "Summarises <b>reports</b>."  # unchanged
+    client.post(url, data={"description": "   "}, auth=TEST_AUTH)
+    session.expire_all()
+    assert session.get(Agent, agent_id).description is None  # empty removes it
+
+
+def test_description_needs_login_and_csrf(client, session):
+    agent_id = add_agent(client, session)
+    url = f"/dashboard/agents/{agent_id}/description"
+    assert client.post(url, data={"description": "hi"}).status_code == 401
+    assert client.post(url, data={"description": "hi"}, auth=TEST_AUTH,
+                       headers={"X-CSRF-Token": "wrong"}).status_code == 403
+
+
+def test_agents_can_read_each_others_descriptions(client, session):
+    one = add_agent(client, session, "agent-1")
+    two = add_agent(client, session, "agent-2")
+    client.post(f"/dashboard/agents/{two}/description", data={"description": "Makes PDF reports."}, auth=TEST_AUTH)
+    listed = client.get("/api/agents", headers=headers_for("agent-1")).json()
+    assert {a["name"]: a["description"] for a in listed} == {"agent-1": None, "agent-2": "Makes PDF reports."}
+    assert client.get("/api/agents/agent-2", headers=headers_for("agent-1")).json()["description"] == "Makes PDF reports."

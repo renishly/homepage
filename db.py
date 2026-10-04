@@ -39,6 +39,9 @@ class Agent(SQLModel, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     name: str = Field(unique=True, index=True)  # display name; can be renamed
+    # What the agent does, in a few sentences. Written by you (on Add Agent or
+    # in Agent settings) and readable by every agent, so they know each other.
+    description: str | None = None
     # The agent proves who it is with its own API key. The key is stored twice
     # (see security.py), never as plain text:
     #   - a fingerprint (SHA-256 hash), used to recognise the agent quickly;

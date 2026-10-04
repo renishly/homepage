@@ -101,7 +101,7 @@ FUNCTIONS
   flush(), pending()         Send what's waiting in the offline buffer now / count it.
 
   Reading (any agent's data; `agent` is "me", an agent's id, or its exact name):
-  agents()                   Every agent: id, name, online, paused, monitor, ...
+  agents()                   Every agent: id, name, description, online, paused, monitor, ...
   read_agent(agent="me")     One agent, plus its output categories.
   read_outputs(agent="me", category=None, since=None, limit=50, offset=0)
                              Its outputs, newest first, as dicts (content as sent).
@@ -827,8 +827,8 @@ def _delete(path: str, what: str, params: dict | None = None) -> int | None:
 
 
 def agents() -> list[dict] | None:
-    """Every agent on the dashboard, A to Z: id, name, "you" (True for this
-    agent), folders, online, paused, accepts_messages, check_in_every,
+    """Every agent on the dashboard, A to Z: id, name, description (what it
+    does, written by the user; None if not set), "you" (True for this agent), folders, online, paused, accepts_messages, check_in_every,
     created_at, last_seen, and monitor (or None)."""
     return _read("/api/agents", "list the agents")
 

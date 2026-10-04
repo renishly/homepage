@@ -63,6 +63,7 @@ MIN_CHECK_IN = 1
 MAX_CHECK_IN = 7 * 24 * 60 * 60  # a week
 CHECK_IN_SLACK = 30
 MAX_AGENT_NAME = 50
+MAX_DESCRIPTION = 1000  # characters
 MAX_FOLDER_NAME = 40
 MIN_API_KEY_LENGTH = 20
 
@@ -561,6 +562,19 @@ def render_monitor_pin(agent: Agent, oob: bool = False) -> str:
     return templates.get_template("partials/monitor_pin.html").render(agent=agent, oob=oob)
 
 
+def clean_description(raw: str | None) -> tuple[str | None, str | None]:
+    """Tidy a description: returns (description or None if empty, error or None).
+
+    Line breaks are kept (a description can have a few short paragraphs), but
+    spaces at the ends and runs of blank lines are trimmed.
+    """
+    lines = [line.rstrip() for line in (raw or "").replace("\r\n", "\n").strip().split("\n")]
+    description = re.sub(r"\n{3,}", "\n\n", "\n".join(lines))
+    if len(description) > MAX_DESCRIPTION:
+        return description, f"The description can be at most {MAX_DESCRIPTION} characters."
+    return description or None, None
+
+
 def check_new_api_key(session: Session, api_key: str) -> str | None:
     """Return an error message if this key can't be used, or None if it's fine."""
     if len(api_key) < MIN_API_KEY_LENGTH or any(c.isspace() for c in api_key):
@@ -659,6 +673,7 @@ def agent_header_context(
     error: str | None = None,
     settings_open: bool = False,
     monitor_error: str | None = None,
+    description_error: str | None = None,
 ) -> dict:
     """Data for the top of an agent's page: its name, tags, and the settings pop-up.
 
@@ -674,6 +689,7 @@ def agent_header_context(
         "untagged": untagged,
         "error": error,  # shown under the name in settings
         "monitor_error": monitor_error,  # shown under the monitor link in settings
+        "description_error": description_error,  # shown under the description in settings
         "settings_open": settings_open,
     }
 
@@ -684,12 +700,16 @@ def render_agent_header(
     agent: Agent,
     error: str | None = None,
     monitor_error: str | None = None,
+    description_error: str | None = None,
 ):
     """Just the header part, sent back after changing something in settings.
 
     The settings pop-up stays open, because that's where those changes are made.
     """
-    context = agent_header_context(session, agent, error, settings_open=True, monitor_error=monitor_error)
+    context = agent_header_context(
+        session, agent, error, settings_open=True,
+        monitor_error=monitor_error, description_error=description_error,
+    )
     return templates.TemplateResponse(request, "partials/agent_header.html", context)
 
 
@@ -843,6 +863,7 @@ def create_agent(
     request: Request,
     name: str = Form(""),
     api_key: str = Form(""),
+    description: str = Form(""),
     folder_id: int | None = Form(None),
     session: Session = Depends(get_session),
     user: str = Depends(require_user),
@@ -861,10 +882,13 @@ def create_agent(
 
     if error is None and name_taken(session, Agent, name):
         error = "An agent with that name already exists."
+    description, description_error = clean_description(description)
+    if error is None:
+        error = description_error
     if error is None:
         error = check_new_api_key(session, api_key)
 
-    agent = Agent(name=name)
+    agent = Agent(name=name, description=description)
     if error is None:
         try:
             store_api_key(agent, api_key)
@@ -877,7 +901,7 @@ def create_agent(
         return templates.TemplateResponse(
             request,
             "partials/add_agent_form.html",
-            {"error": error, "name": name, "folder_id": folder_id},
+            {"error": error, "name": name, "description": description, "folder_id": folder_id},
         )
 
     session.add(agent)
@@ -1234,6 +1258,29 @@ def rename_agent(
         session.commit()
         session.refresh(agent)
     return render_agent_header(request, session, agent, error)
+
+
+@app.post(
+    "/dashboard/agents/{agent_id}/description",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_csrf)],
+)
+def set_description(
+    request: Request,
+    agent_id: int,
+    description: str = Form(""),
+    session: Session = Depends(get_session),
+    user: str = Depends(require_user),
+):
+    """Change what the agent's description says (empty removes it)."""
+    agent = get_agent_or_404(session, agent_id)
+    cleaned, error = clean_description(description)
+    if error is None:
+        agent.description = cleaned
+        session.add(agent)
+        session.commit()
+        session.refresh(agent)
+    return render_agent_header(request, session, agent, description_error=error)
 
 
 @app.post(
@@ -1659,6 +1706,7 @@ def agent_info(session: Session, agent: Agent, caller: Agent) -> dict:
     return {
         "id": agent.id,
         "name": agent.name,
+        "description": agent.description,
         "you": agent.id == caller.id,
         "folders": [folder.name for folder in folders_of(session, agent.id)],
         "online": is_online(agent),

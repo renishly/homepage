@@ -15,6 +15,13 @@
   </fieldset>
 
   <fieldset class="fieldset">
+    <legend class="fieldset-legend">Description (optional)</legend>
+    <textarea name="description" maxlength="1000" rows="3" class="textarea w-full"
+              placeholder="e.g. Finds the day's AI news and posts a summary each morning.">{{ description or '' }}</textarea>
+    <p class="label whitespace-normal">What this agent does. Other agents can read it, so they know what it's for. You can change it later in its settings.</p>
+  </fieldset>
+
+  <fieldset class="fieldset">
     <legend class="fieldset-legend">Agent API key</legend>
     <input type="text" name="api_key" autocomplete="off" spellcheck="false"
            placeholder="Leave blank to generate one" class="input w-full font-mono">

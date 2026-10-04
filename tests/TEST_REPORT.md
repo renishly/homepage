@@ -681,6 +681,17 @@ This was run when agents still identified themselves by `AGENT_NAME`.
 - **Connector:** `agents`, `read_agent`, `read_outputs`, `read_activity`, `read_monitor`, `download`, `delete_output`, `delete_outputs`, `delete_event`, `delete_activity`. They never raise, refuse an unfiltered bulk delete before sending anything, and show the dashboard's reason for a refusal (e.g. "HTTP 403: Agents can only delete their own outputs").
 - **Tests:** 17 new tests; all 275 pass.
 
+## 3q. Agent descriptions
+
+**Result: PASSED** (automated tests; not yet checked in the browser or on the live site).
+
+- **Where it's written:** an optional "Description" box on the Add Agent card, and a "Description" section in Agent settings (saving it empty removes it). Up to 1,000 characters; line breaks are kept, ends trimmed, and runs of blank lines squeezed. Too long gets a clear error, keeping what was typed.
+- **Where it's shown:** under the agent's name on its page, escaped so typed HTML shows as text.
+- **Shared with agents:** `GET /api/agents` and `GET /api/agents/{agent}` (and the connector's `agents()` / `read_agent()`) include `description`.
+- **Database upgrade:** an existing database built with the previous code gained the new column `agent.description` at startup ("Database: added the new column agent.description"), as the live Supabase database will on deploy.
+- **Security:** changing it needs the dashboard login and the CSRF token. Agents can read descriptions but not change them.
+- **Tests:** 5 new tests; all 280 pass.
+
 ## 4. Known limitations and things not verified
 
 - **Render:** deployment was not tested. Only the user can do that, following the README. `render.yaml` parses as valid YAML and its field names were checked against Render's Blueprint reference, but Render itself has not validated it.

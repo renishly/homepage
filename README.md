@@ -34,7 +34,7 @@ hand-written JavaScript, and [daisyUI](https://daisyui.com) for styling.
 These are the tables. Each side reads what the other writes:
 
 - **Agent**: one row per agent, added with the dashboard's **Add Agent** card.
-  - It stores a display name, which you can rename at any time.
+  - It stores a display name, which you can rename at any time, and an optional description that every agent can read.
   - It also stores the agent's API key in two forms, never as plain text: a *fingerprint* (SHA-256 hash), used to recognise the agent, and an *encrypted copy*, so **View key** can show it again. The encryption secret (`KEY_ENCRYPTION_SECRET`) lives in `.env`, not in the database, so a copied database doesn't reveal any keys.
 - **Event**: messages from an agent to you, such as "Agent online" or "Error: ...".
 - **Command**: messages from you to one agent (`start`, `pause`, or `message` with some text).
@@ -189,7 +189,7 @@ Use a different `category` for each kind of result, for example `"articles"`, `"
 
 | Function | What it does |
 |---|---|
-| `agents()` | Every agent on the dashboard, A to Z: id, name, whether it's you, folders, online, paused, check-in rhythm, and its monitor. |
+| `agents()` | Every agent on the dashboard, A to Z: id, name, its description (what it does, in your words), whether it's you, folders, online, paused, check-in rhythm, and its monitor. |
 | `read_agent(agent="me")` | One agent, plus its output categories with counts. |
 | `read_outputs(agent="me", category=None, since=None, limit=50, offset=0)` | An agent's outputs, newest first, with `content` as it was sent (text, a number, or a list/dict). `category` can be one name or a list. |
 | `read_activity(agent="me", kind=None, since=None, limit=50, offset=0)` | An agent's Activity log, newest first; `kind="error"` for just its errors. |
@@ -232,6 +232,7 @@ Use a different `category` for each kind of result, for example `"articles"`, `"
 
   Everything you can change is behind the **gear icon** next to the name, which opens **Agent settings**:
   - **Name**: rename the agent. It stays connected, because its key doesn't change.
+  - **Description**: a few sentences on what the agent does (up to 1,000 characters), shown under its name. You can also write it on the **Add Agent** card. Every agent can read every description, so they know what the others are for. Save it empty to remove it.
   - **Folders**: **+ Add tag** puts the agent in a folder, and the × on a tag takes it out again.
   - **Monitor**: set, change or remove the monitor link. Saving a link replaces whatever the monitor showed, including a PDF. PDFs can only come from the agent (`set_monitor(Path("summary.pdf"))`). The most recent change wins.
   - **API key**:

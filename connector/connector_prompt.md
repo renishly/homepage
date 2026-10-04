@@ -79,7 +79,7 @@ Read the values from the environment variables `DASHBOARD_URL` and `DASHBOARD_AP
 **Any agent can read every agent's data; an agent can only delete its own.**
 
 - `{agent}` in a path is `me` (this agent), another agent's numeric `id`, or its exact name (URL-encoded). An unknown agent gets `404`.
-- An agent looks like `{"id", "name", "you": true for this agent, "folders": [...], "online", "paused", "accepts_messages", "check_in_every", "created_at", "last_seen", "monitor"}`. `GET /api/agents/{agent}` adds `"categories": [{"name", "count", "latest_at"}]`.
+- An agent looks like `{"id", "name", "description", "you": true for this agent, "folders": [...], "online", "paused", "accepts_messages", "check_in_every", "created_at", "last_seen", "monitor"}`. `GET /api/agents/{agent}` adds `"categories": [{"name", "count", "latest_at"}]`.
 - An output looks like `{"id", "agent_id", "category", "kind", "content", "created_at"}`.
   - `kind` is `"text"`, `"number"`, `"link"`, `"json"` or `"file"`.
   - `content` is what was sent: text, a number, or a list/dict; for files, the file's name.
@@ -87,6 +87,7 @@ Read the values from the environment variables `DASHBOARD_URL` and `DASHBOARD_AP
 - An activity line looks like `{"id", "agent_id", "type", "message", "data", "created_at"}`.
 - A monitor is `{"kind": "link", "url", "label", "updated_at"}` or `{"kind": "pdf", "filename", "label", "updated_at", "file_url"}`.
 - `since` and `before` are ISO 8601 times like `2026-10-03T08:00:00Z`.
+- `description` is what the agent does, in the user's words (or `null`). Read other agents' descriptions to understand what they do before using their outputs.
 - Reads never show API keys, nor the Start/Pause/messages sent to an agent.
 - Deleting another agent's output or activity line gets `403`, and changes nothing. Deleting outputs or activity leaves a `"delete"` line in this agent's activity log, so the user can see what went.
 - Deleting everything needs `all=true`, so a missing filter can't wipe everything by mistake.

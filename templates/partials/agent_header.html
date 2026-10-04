@@ -2,7 +2,7 @@
    (display only), and when it was added and last seen.
 
    Everything you can change lives in the "Agent settings" pop-up (#agent-settings)
-   that the gear opens: name, folder tags, monitor link, API key (view/replace) and delete.
+   that the gear opens: name, description, folder tags, monitor link, API key (view/replace) and delete.
 
    Renaming and tag changes send their form with HTMX, and the server replies
    with a fresh copy of this whole section (#agent-header). settings_open tells
@@ -45,6 +45,10 @@
     {% include "partials/run_state.html" %}
   </div>
 
+  {% if agent.description %}
+  <p class="max-w-prose whitespace-pre-line break-words">{{ agent.description }}</p>
+  {% endif %}
+
   {# Folder tags, shown here for reference; they're changed in the settings. #}
   {% if tagged %}
   <div class="flex flex-wrap gap-2" aria-label="Folders">
@@ -85,6 +89,22 @@
         <p class="text-error text-sm">{{ error }}</p>
         {% endif %}
         <p class="text-xs text-base-content/50">Renaming doesn't disconnect the agent; its key stays the same.</p>
+      </section>
+
+      <!-- Description -->
+      <section class="space-y-2">
+        <h4 class="font-semibold">Description</h4>
+        <form class="space-y-2"
+              hx-post="/dashboard/agents/{{ agent.id }}/description"
+              hx-target="#agent-header" hx-swap="outerHTML">
+          <textarea name="description" maxlength="1000" rows="3" class="textarea w-full"
+                    placeholder="What does this agent do?" aria-label="Agent description">{{ agent.description or '' }}</textarea>
+          <button type="submit" class="btn btn-primary">Save description</button>
+        </form>
+        {% if description_error %}
+        <p class="text-error text-sm">{{ description_error }}</p>
+        {% endif %}
+        <p class="text-xs text-base-content/50">Shown under the name, and readable by every agent (so they know what this one does). Leave it empty and save to remove it.</p>
       </section>
 
       <!-- Folder tags -->

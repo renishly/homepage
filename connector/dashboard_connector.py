@@ -18,8 +18,8 @@ QUICK START: everything this file offers, in the order you'd usually use it
 
     from pathlib import Path
     from dashboard_connector import (
-        accept_messages, check_in, flush, listen, output, report, set_monitor,
-        start_check_ins, wait_if_paused,
+        accept_inbox, accept_messages, check_in, flush, listen, output, report,
+        set_monitor, start_check_ins, wait_if_paused,
     )
 
     # 1. Optional: let the dashboard send this agent text messages. Until you
@@ -27,6 +27,11 @@ QUICK START: everything this file offers, in the order you'd usually use it
     def on_message(text):            # e.g. pass the text to your agent's LLM
         ...
     accept_messages(on_message)
+
+    # 1b. Optional: take files you upload to this agent's Inbox on the dashboard.
+    def on_file(item, path):         # path: a temporary copy; store it your own way
+        shutil.copy(path, Path("data") / item["filename"])   # (import shutil)
+    accept_inbox(on_file)            # each file is deleted from the dashboard once stored
 
     # 2. Optional: run your own code when Start or Pause is pressed.
     def on_command(command):         # command["command"] is "start" or "pause"
@@ -99,6 +104,11 @@ FUNCTIONS
   wait_if_paused()           Wait while the dashboard has this agent paused.
   is_paused()                True while paused.
   flush(), pending()         Send what's waiting in the offline buffer now / count it.
+  accept_inbox(on_file)      Pick up files you upload to this agent's Inbox:
+                             on_file(item, path) gets each one at check-ins; return
+                             normally once stored and it's deleted from the dashboard.
+  inbox(), download_inbox(item, save_to=None), confirm_inbox(item)
+                             The same, by hand: list, download, confirm.
 
   Reading (any agent's data; `agent` is "me", an agent's id, or its exact name):
   agents()                   Every agent: id, name, description, online, paused, monitor, ...
@@ -151,6 +161,7 @@ OFFLINE BUFFER
 import json
 import mimetypes
 import os
+import tempfile
 import threading
 import time
 import uuid
@@ -300,6 +311,10 @@ _state_known = False  # True once a check-in has succeeded
 _accepts_messages = False  # set by accept_messages()
 _declared_every = None  # seconds between check-ins, as this agent declared it
 _message_handler = None
+_accepts_inbox = False  # set by accept_inbox()
+_inbox_handler = None
+_inbox_waiting = 0  # how many Inbox files the dashboard said are waiting
+_inbox_lock = threading.Lock()  # one Inbox pick-up at a time
 _command_handler = None
 _check_in_thread = None
 _announced_hold = False
@@ -317,7 +332,8 @@ def _set_paused(paused: bool) -> None:
 def _check_in() -> bool:
     """Send the check-in itself (POST /api/state) and learn the pause state."""
     global _state_known
-    body = {"accepts_messages": _accepts_messages}
+    global _inbox_waiting
+    body = {"accepts_messages": _accepts_messages, "accepts_inbox": _accepts_inbox}
     if _declared_every is not None:
         body["check_in_every"] = _declared_every
     try:
@@ -326,6 +342,10 @@ def _check_in() -> bool:
         return False  # unreachable: keep the last known state and try again later
     _state_known = True
     _set_paused(bool(state.get("paused")))
+    try:
+        _inbox_waiting = int(state.get("inbox_waiting") or 0)
+    except (TypeError, ValueError):
+        _inbox_waiting = 0
     return True
 
 
@@ -353,7 +373,8 @@ def check_in(every: float | None = None) -> bool:
            agent). The dashboard shows the agent as online while it keeps to
            this rhythm, plus some slack. Set it once; it's remembered.
     Also learns whether the agent is paused (see is_paused()) and hands any
-    waiting Start/Pause/messages to your listen()/accept_messages() handlers.
+    waiting Start/Pause/messages to your listen()/accept_messages() handlers,
+    and any waiting Inbox files to your accept_inbox() handler.
     Returns True if the dashboard was reached.
 
     For an agent that runs on a schedule, call it at the start of each run.
@@ -365,6 +386,8 @@ def check_in(every: float | None = None) -> bool:
     reached = _check_in()
     if reached and (_command_handler is not None or _message_handler is not None):
         _check_commands()
+    if reached and _inbox_handler is not None and _inbox_waiting:
+        _check_inbox()
     return reached
 
 
@@ -945,6 +968,111 @@ def delete_activity(before=None, everything: bool = False) -> int | None:
         return None
     params = {"before": _as_time(before), "all": "true" if everything else None}
     return _delete("/api/events", "delete activity", params)
+
+
+# =============================================================================
+# The Inbox: files you upload for this agent on its dashboard page
+#
+# They wait in the dashboard until this agent takes them. accept_inbox(on_file)
+# makes every check-in download each waiting file to a temporary place, hand it
+# to on_file(item, path), and then confirm it, which deletes it from the
+# dashboard. Store the data your own way inside on_file (copy the file, load it
+# into your database...): the temporary copy is removed afterwards.
+# If on_file raises an error or returns False, the file is NOT confirmed: it
+# stays in the Inbox and is offered again at the next check-in.
+# Inbox files are only for this agent; other agents can't see them.
+# =============================================================================
+
+
+def accept_inbox(on_file) -> None:
+    """Pick up files you upload to this agent's Inbox on the dashboard.
+
+    on_file(item, path) is called for each one, at check-ins (so the agent
+    must also check in: start_check_ins() or check_in()):
+      item: {"id", "filename", "content_type", "size", "note", "uploaded_at"}
+            ("note" is what you typed with the upload, or None);
+      path: a pathlib.Path to a temporary copy of the file. Read it, or copy
+            it somewhere permanent, inside on_file: it's deleted afterwards.
+    Return normally (or anything but False) once the data is safely stored;
+    the file is then deleted from the dashboard. Raise an error or return
+    False to leave it in the Inbox for next time.
+    """
+    global _accepts_inbox, _inbox_handler
+    if PROBLEM:
+        print("[dashboard] Not accepting Inbox files until the settings are fixed.")
+        return
+    _inbox_handler = on_file
+    _accepts_inbox = True
+    if _check_in() and _inbox_waiting:  # tell the dashboard straight away, and take what's waiting
+        _check_inbox()
+
+
+def inbox() -> list[dict] | None:
+    """The files waiting in this agent's Inbox, oldest first (None if unreachable)."""
+    return _read("/api/inbox", "read the inbox")
+
+
+def download_inbox(item, save_to=None):
+    """Download one Inbox file (an item from inbox()) to `save_to`, or to a new
+    temporary file. Returns the pathlib.Path, or None (with a warning) if it
+    couldn't be fetched. Downloading doesn't remove it: see confirm_inbox()."""
+    from pathlib import Path
+
+    if PROBLEM or not isinstance(item, dict) or "id" not in item:
+        return None
+    if save_to is None:
+        name = os.path.basename(str(item.get("filename") or "file")) or "file"
+        save_to = os.path.join(tempfile.mkdtemp(prefix="dashboard_inbox_"), name)
+    try:
+        response = _http.get(f"{DASHBOARD_URL}/api/inbox/{int(item['id'])}/file",
+                             timeout=UPLOAD_TIMEOUT_SECONDS, allow_redirects=False, stream=True)
+        if response.is_redirect:
+            raise requests.HTTPError(f"redirected to {response.headers.get('Location')}", response=response)
+        response.raise_for_status()
+        with open(save_to, "wb") as handle:
+            for piece in response.iter_content(chunk_size=1024 * 1024):  # never the whole file in memory
+                handle.write(piece)
+    except (requests.RequestException, OSError, ValueError) as error:
+        _warn(f"download inbox file {item.get('filename')!r}", error)
+        return None
+    return Path(save_to)
+
+
+def confirm_inbox(item) -> bool:
+    """Tell the dashboard this agent has stored an Inbox file: it's deleted there."""
+    item_id = _id_of(item)
+    return item_id is not None and bool(_delete(f"/api/inbox/{item_id}", f"confirm inbox file {item_id}"))
+
+
+def _check_inbox() -> None:
+    """Hand each waiting Inbox file to the accept_inbox() handler, then confirm it."""
+    if not _inbox_lock.acquire(blocking=False):
+        return  # another check-in is already doing this
+    try:
+        items = inbox()
+        if not isinstance(items, list):
+            return
+        for item in items:
+            if not isinstance(item, dict) or "id" not in item:
+                continue
+            path = download_inbox(item)
+            if path is None:
+                continue  # try again at the next check-in
+            try:
+                keep = _inbox_handler(item, path) is False
+            except Exception as error:  # a bug in the handler shouldn't stop the agent
+                report(f"Failed to handle inbox file {item.get('filename')!r}: {error}", "error")
+                keep = True
+            finally:
+                try:
+                    os.remove(path)
+                    os.rmdir(os.path.dirname(path))
+                except OSError:
+                    pass
+            if not keep:
+                confirm_inbox(item)
+    finally:
+        _inbox_lock.release()
 
 
 def _check_commands(on_command=None) -> None:

@@ -7,6 +7,7 @@ I have an AI agent (the code in this project) and a separate web dashboard where
 3. The agent **receives commands** from the dashboard (Start, Pause, and text messages) and reacts to them.
 4. Optionally, the agent **sets its monitor**. This is either a link to wherever its data lives (such as a Google Sheet or a dashboard), or a PDF the dashboard shows inside the page (such as a daily summary it regenerates on a schedule). Only the latest monitor is shown.
 5. Optionally, the agent **reads what any agent on the dashboard has shared** (including itself) and **deletes its own old data**. See "Reading and deleting" below.
+6. Optionally, the agent **takes files I upload to its Inbox** on the dashboard and stores them its own way. See "The Inbox" below.
 
 Don't change what the agent already does, beyond what's needed for this.
 
@@ -57,7 +58,11 @@ Read the values from the environment variables `DASHBOARD_URL` and `DASHBOARD_AP
 | `DELETE /api/events/{id}` | none | `200` with `{"deleted": 1}`; `403` if it's another agent's |
 | `DELETE /api/events` | query: `before`, or `all=true` | `200` with `{"deleted": <count>}`; `422` with neither |
 | `DELETE /api/monitor` | none | `200` with `{"deleted": 1 or 0}` |
+| `GET /api/inbox` | none | `200` with this agent's waiting Inbox files, oldest first |
+| `GET /api/inbox/{id}/file` | none | `200` with the file (streamed; up to 50 MB), or `404` if it isn't this agent's |
+| `DELETE /api/inbox/{id}` | none | `200` with `{"deleted": 1}`: "I've stored it", so the dashboard deletes it |
 
+- `POST /api/state` also accepts `"accepts_inbox": true or false`, and its reply includes `"inbox_waiting": <count>`.
 - `type` is `"log"` (shown blue), `"status"` (green), or `"error"` (red).
 - `data` is optional extra detail, such as `{"url": "..."}` or `{"path": "..."}`.
 - A command looks like `{"id": 7, "command": "message", "payload": {"text": "hi"}, "status": "pending", "created_at": "..."}`. `command` is `"start"`, `"pause"` or `"message"`. `payload` is only set for messages.
@@ -92,6 +97,17 @@ Read the values from the environment variables `DASHBOARD_URL` and `DASHBOARD_AP
 - Deleting another agent's output or activity line gets `403`, and changes nothing. Deleting outputs or activity leaves a `"delete"` line in this agent's activity log, so the user can see what went.
 - Deleting everything needs `all=true`, so a missing filter can't wipe everything by mistake.
 - Reads and deletes go straight to the dashboard: don't hold them while paused or put them in the offline buffer. Deletes only affect what the dashboard already has.
+
+## The Inbox
+
+I can upload files (up to 50 MB each, with an optional note) to this agent's Inbox on the dashboard. They wait in the dashboard's database until the agent takes them, and are then deleted there. Only this agent can see its Inbox.
+
+- An Inbox file looks like `{"id", "filename", "content_type", "size", "note", "uploaded_at", "file_url"}`.
+- **Opt-in, like messages:** send `"accepts_inbox": true` in check-ins once the agent can handle files. The dashboard warns me until it does (I can still upload).
+- At each check-in where `inbox_waiting` is above 0: `GET /api/inbox`, then for each file download `file_url` **streaming it to a temporary file** (never the whole file in memory), hand it to the agent's handler, and only once the handler has stored the data its own way, `DELETE /api/inbox/{id}` to confirm. If the handler fails, don't confirm: the file stays and is offered again next time. Always remove the temporary copy.
+- Provide `accept_inbox(on_file)`, where `on_file(item, path)` gets the item and the temporary file's path, and returning `False` (or raising) means "keep it for next time". Also `inbox()`, `download_inbox(item, save_to=None)` and `confirm_inbox(item)` for doing it by hand.
+- Use only the file's base name (never a path in it) when saving it anywhere.
+- Ask me what this agent should do with uploaded files (e.g. load a CSV into its database) before writing the handler.
 
 ## It must work wherever the dashboard runs
 

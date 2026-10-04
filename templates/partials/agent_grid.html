@@ -1,6 +1,7 @@
 {# One page of the grid: up to 9 cells (agent cards, then the "Add Agent" card)
    plus the page buttons. HTMX reloads this fragment every 3 seconds. #}
 {% import "partials/output_macros.html" as show %}
+{% import "partials/icons.html" as icon %}
 {% set folder_param = "&folder=" ~ folder.id if folder else "" %}
 
 <p class="text-sm text-base-content/60 mb-4">
@@ -89,17 +90,17 @@
 
       {# @click.stop keeps button clicks from also opening the agent's page. #}
       <div class="card-actions" @click.stop>
-        <button class="btn btn-success btn-sm"
+        <button class="btn btn-success btn-sm" aria-label="Start" title="Start"
                 hx-post="/dashboard/agents/{{ agent.id }}/command"
                 hx-vals='{"command": "start"}'
                 hx-target="#toasts" hx-swap="beforeend">
-          Start
+          {{ icon.play("size-4") }}
         </button>
-        <button class="btn btn-warning btn-sm"
+        <button class="btn btn-warning btn-sm" aria-label="Pause" title="Pause"
                 hx-post="/dashboard/agents/{{ agent.id }}/command"
                 hx-vals='{"command": "pause"}'
                 hx-target="#toasts" hx-swap="beforeend">
-          Pause
+          {{ icon.pause("size-4") }}
         </button>
       </div>
 

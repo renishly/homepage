@@ -5,7 +5,7 @@ Your personal website, version 1:
 - **`/`**: a public home page (a placeholder for your future portfolio).
 - **`/dashboard`**: a password-protected dashboard for your AI agents.
   - Agents appear as cards in a 3 × 3 grid, with page buttons when they don't all fit.
-  - Each card has Start and Pause buttons, and the last cell is an **Add Agent** card.
+  - Each card has Start (▷) and Pause (‖) buttons, and the last cell is an **Add Agent** card.
   - A folder sidebar shows **All Agents** or just the agents tagged with one folder. It can be folded out of the way, and its corner has an ⓘ guide and **Implement connector** downloads.
   - Click a card to open that agent's page: rename it, tag it with folders, send commands, read its activity log, or delete it.
 - **`/api/...`**: a small API your agents use to talk to the site. Any agent can read every agent's outputs, activity and monitor, but can only delete its own.
@@ -41,6 +41,7 @@ These are the tables. Each side reads what the other writes:
 - **Folder** and **AgentFolderLink**: your folders, and which agents are tagged with which folder. An agent can be in several folders.
 - **Output** and **OutputFile**: results an agent chose to share with `output(content, category)`. Files are stored in the database itself, up to 5 MB each, so they survive restarts on any host.
 - **CategoryNotification**: which output categories have the bell turned on.
+- **InboxItem** and **InboxChunk**: files you uploaded to an agent's Inbox, stored in 1 MB pieces, deleted once the agent has taken them.
 - **LoginSession**: one row per signed-in device (only a fingerprint of its token), deleted when it logs out.
 
 **Each agent has its own API key.** The agent sends it in the `X-API-Key` header, and the site uses it to work out which agent is calling. That's why renaming an agent never disconnects it.
@@ -59,12 +60,13 @@ Here's the flow:
 | `db.py` | Database connection and the tables (`Agent`, `Folder`, `AgentFolderLink`, `Event`, `Command`, `Output`, `OutputFile`, `CategoryNotification`). |
 | `security.py` | The dashboard login (sign-in sessions), CSRF protection, the per-agent API-key check, key encryption, and the agent editing password check. |
 | `static/tailwind.css` | The Tailwind CSS styles the templates use, built ahead of time from `tailwind.input.css` (see "Changing the styles"). |
+| `static/grid.js` | Makes the background grid carry on from where it was on the previous page, and plays its rush on each page load. |
 | `static/theme.css` | The site's look: the "codepaper" theme (black IBM Plex Mono text on `#ffff83` yellow paper, cards with thin black borders and hard shadows, vibrant yellow `#ffe600` hovers, a tilted background grid that drifts and rushes forward on each page load) and all the animations (page transitions, a typed home title, pressing buttons, snapping pop-ups, sliding toasts, a pulsing "online" light). Change colours here: they're the variables at the top. Animations switch off for visitors who ask their device to reduce motion. |
 | `templates/` | The HTML pages (Jinja2). |
 | `templates/login.html` | The dashboard's login page. |
 | `templates/dashboard.html` | The grid page, with the folder sidebar and the Add Agent window. |
 | `templates/agent.html` | One agent's page. |
-| `templates/partials/` | Pieces the pages reuse or refresh: the grid (`agent_grid.html`), the Add Agent form and its result (`add_agent_form.html`, `agent_created.html`), the agent's name, tags and settings pop-up (`agent_header.html`), its running/paused badge (`run_state.html`), a shown or replaced API key (`api_key.html`), the two connection values (`connection_values.html`), the Outputs section (`outputs.html`, with its Filter rows `outputs_options.html`, list `outputs_list.html`, Filter button text `outputs_summary.html`, and `output_macros.html` for showing each kind of output), the Monitor section and its pin button (`monitor.html`, `monitor_pin.html`), and the Activity list (`events.html`). |
+| `templates/partials/` | Pieces the pages reuse or refresh: the grid (`agent_grid.html`), the Add Agent form and its result (`add_agent_form.html`, `agent_created.html`), the agent's name, tags and settings pop-up (`agent_header.html`), the control buttons' icons (`icons.html`), its running/paused badge (`run_state.html`), a shown or replaced API key (`api_key.html`), the two connection values (`connection_values.html`), the Outputs section (`outputs.html`, with its Filter rows `outputs_options.html`, list `outputs_list.html`, Filter button text `outputs_summary.html`, and `output_macros.html` for showing each kind of output), the Monitor section and its pin button (`monitor.html`, `monitor_pin.html`), and the Activity list (`events.html`). |
 | `agent/agent.py` | A demo agent, built on the same connector you download, for trying the dashboard out. |
 | `connector/` | The two downloads offered by **Implement connector**: `dashboard_connector.py` (code) and `connector_prompt.md` (a prompt for an AI assistant). Both work with a dashboard anywhere. The address and key are placeholders, and the only thing filled in on download is a "downloaded from" hint. |
 | `tests/` | Automated tests and the test report. |
@@ -164,6 +166,7 @@ The same connector works with all three; only these values change. After adding 
 | `wait_if_paused()` / `is_paused()` | Call `wait_if_paused()` at safe points in your agent's loop so **Pause stops its work**; it waits until Start. `is_paused()` just tells you the state. |
 | `accept_messages(on_message)` | Switches on the dashboard's message box for this agent. `on_message(text)` gets each message, for example to pass it to the agent's LLM. |
 | `flush()` / `pending()` | Send anything waiting in the offline buffer now / how many items are waiting. |
+| `accept_inbox(on_file)` | Takes files you upload to this agent's **Inbox**. `on_file(item, path)` gets each one at check-ins (`path` is a temporary copy; `item["note"]` is your note). Store the data your own way; once it returns, the dashboard deletes its copy. Raise an error or return `False` to keep the file for next time. `inbox()`, `download_inbox(item)` and `confirm_inbox(item)` do the same by hand. |
 | `set_monitor(link_or_pdf, label)` | Sets what the agent's **Monitor** shows (only the latest one is kept): a link to where its data lives, such as a Google Sheet, or a **PDF shown inside the page**, such as a daily summary or report the agent regenerates on a schedule. |
 
 **Nothing is lost while the dashboard is unreachable.**
@@ -211,6 +214,17 @@ Use a different `category` for each kind of result, for example `"articles"`, `"
 
 ## Using the dashboard
 
+### The Inbox: giving an agent files
+
+On an agent's page, the **Inbox** button (third in Controls) opens a window where you upload files for that agent, up to 50 MB each, with an optional note.
+- The files wait in the dashboard's own database, where only that agent can see them.
+- At its next check-in the agent downloads each one, stores the data its own way (its own database, a folder...), and confirms. The dashboard then deletes its copy, so the inbox is only a short stop.
+- If the agent fails to store a file, it doesn't confirm, and the file is offered again at its next check-in. Nothing is lost.
+- Until you remove it, a waiting file shows in the window: click its name to download it again, or **Remove** to take it back out.
+- Activity shows each step: "Inbox: you uploaded…", then "Inbox: agent received…".
+- Agents switch their inbox on with `accept_inbox(on_file)` (see the connector's functions). You can upload before that; the window warns that the files will wait.
+- Waiting files on all agents together can take up to 200 MB, to protect the free database. Large files are stored in 1 MB pieces, so they never need much memory on the server.
+
 - **Add an agent:** click the **Add Agent** card (the last cell of the grid).
   - Give the agent a name. Leave the key box blank to have a key generated, or paste a key of your own (at least 20 characters, no spaces).
   - The key is shown right away. You can see it again later with **View key** in the agent's settings.
@@ -231,7 +245,7 @@ Use a different `category` for each kind of result, for example `"articles"`, `"
 
     Images (PNG, JPEG, GIF, WebP) appear in the page; other files are downloads.
   - **Activity**: the agent's status lines from `report()`, plus a timestamped line every time it sends an output (`output`) or its monitor changes (`monitor`).
-  - **Controls** (Start, Pause, and a message box) sit in a column on the right that stays in view while you scroll. On a phone they're a bar fixed to the bottom of the screen; tap **Message** to type one. The message box is greyed out until the agent says it accepts messages. The badge next to the name shows whether the agent is **running** or **paused**.
+  - **Controls** sit in a column on the right that stays in view while you scroll: icon buttons for Start (▷), Pause (‖) and the **Inbox** (a tray with an arrow, showing how many files are waiting), then a message box with a paper-plane Send button. Hover over a button to see its name. On a phone they're a bar fixed to the bottom of the screen; tap the speech bubble to type a message. The message box is greyed out until the agent says it accepts messages. The badge next to the name shows whether the agent is **running** or **paused**.
 
   Everything you can change is behind the **gear icon** next to the name, which opens **Agent settings**:
   - **Name**: rename the agent. It stays connected, because its key doesn't change.
@@ -260,6 +274,7 @@ Agents are listed A–Z, ignoring upper/lower case. Each page holds 9 cells, and
 
 `agent/agent.py` is a small demo, useful for trying the dashboard out. It uses the same connector as your own agents.
 - It switches messages on and replies to each one.
+- It switches its Inbox on, and keeps files you upload in `agent/received/`.
 - It does a small piece of "work" every 20 seconds, sending a "ticks" output.
 - Press **Pause** and its work stops at the next safe point. Anything it makes while paused is held until **Start**.
 

@@ -10,6 +10,9 @@ local.db
 # The connector's offline buffer (items waiting to be sent)
 dashboard_buffer/
 
+# Files the demo agent took from its Inbox
+agent/received/
+
 # Node.js tools, only needed to rebuild static/tailwind.css
 node_modules/
 package-lock.json

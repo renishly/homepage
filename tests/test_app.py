@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
-from sqlmodel import SQLModel, select
+from sqlmodel import SQLModel, func, select
 
 from conftest import TEST_AUTH, TEST_EDIT_PASSWORD, TEST_LOGIN
 from db import (
@@ -22,6 +22,8 @@ from db import (
     Command,
     Event,
     Folder,
+    InboxChunk,
+    InboxItem,
     LoginSession,
     Output,
     OutputFile,
@@ -1382,8 +1384,8 @@ def test_missing_columns_are_added_to_an_existing_database(tmp_path, monkeypatch
     with old_engine.begin() as connection:  # pretend it predates two newer columns
         connection.execute(sql('ALTER TABLE agent DROP COLUMN check_in_seconds'))
         connection.execute(sql('ALTER TABLE agent DROP COLUMN paused'))
-        connection.execute(sql("INSERT INTO agent (name, api_key_hash, created_at, pinned_monitor, accepts_messages) "
-                               "VALUES ('old agent', 'hash', '2026-01-01', 0, 0)"))
+        connection.execute(sql("INSERT INTO agent (name, api_key_hash, created_at, pinned_monitor, accepts_messages, "
+                               "accepts_inbox) VALUES ('old agent', 'hash', '2026-01-01', 0, 0, 0)"))
     monkeypatch.setattr(db, "engine", old_engine)
     db.create_db_and_tables()
     columns = {c["name"] for c in inspect_db(old_engine).get_columns("agent")}
@@ -1873,7 +1875,7 @@ def test_connector_accept_messages(monkeypatch, fake_site, tmp_path):
     connector.accept_messages(received.append)
     check_in = fake_site["requests"][0]
     assert (check_in["method"], check_in["path"]) == ("POST", "/api/state")
-    assert json_body(check_in) == {"accepts_messages": True}  # the "OK, I take messages" signal
+    assert json_body(check_in) == {"accepts_messages": True, "accepts_inbox": False}  # the "OK, I take messages" signal
 
     connector._command_handler = other_commands.append
     fake_site["body"] = b'[{"id": 3, "command": "message", "payload": {"text": "focus on earnings"}}]'
@@ -2458,7 +2460,7 @@ def test_refreshing_sections_pause_in_hidden_tabs(client, session):
     agent_id = add_agent(client, session)
     pages = client.get("/dashboard", auth=TEST_AUTH).text + client.get(f"/dashboard/agents/{agent_id}", auth=TEST_AUTH).text
     triggers = re.findall(r'hx-trigger="([^"]*every[^"]*)"', html.unescape(pages))
-    assert len(triggers) == 5  # grid, outputs, activity, monitor, messages-ready
+    assert len(triggers) == 6  # grid, outputs, activity, monitor, messages-ready, inbox list
     assert all("document.visibilityState === 'visible'" in trigger for trigger in triggers)
 
 
@@ -2470,3 +2472,153 @@ def test_pages_use_the_prebuilt_tailwind_stylesheet(client):
     # A few classes the templates use, to catch a stylesheet that wasn't rebuilt.
     for selector in (".grid-cols-1", ".line-clamp-2", ".min-h-screen", ".whitespace-pre-line"):
         assert selector in css
+
+
+# --- The Inbox ----------------------------------------------------------------
+
+
+def upload_to_inbox(client, agent_id, *files, note=""):
+    """Upload files from the agent page's Inbox window: (filename, bytes) pairs."""
+    return client.post(
+        f"/dashboard/agents/{agent_id}/inbox",
+        data={"note": note},
+        files=[("files", (name, data, "text/csv")) for name, data in files],
+        auth=TEST_AUTH,
+    )
+
+
+def test_upload_waits_in_the_inbox_in_pieces(client, session):
+    agent_id = add_agent(client, session)
+    big = bytes(range(256)) * 10_000  # 2.56 MB: three 1 MB pieces
+    response = upload_to_inbox(client, agent_id, ("sales.csv", big), note="Q3 numbers")
+    assert "Uploaded sales.csv" in response.text and "Q3 numbers" in response.text
+    item = session.exec(select(InboxItem)).one()
+    assert (item.filename, item.size, item.note) == ("sales.csv", len(big), "Q3 numbers")
+    assert len(session.exec(select(InboxChunk).where(InboxChunk.item_id == item.id)).all()) == 3
+    # You can download it again to check, and it's in the agent's Activity.
+    assert client.get(f"/dashboard/inbox/{item.id}/file", auth=TEST_AUTH).content == big
+    events = client.get("/api/agents/me/events", headers=headers_for("agent-1")).json()
+    assert events[0]["message"] == "Inbox: you uploaded sales.csv (2.4 MB)"
+
+
+def test_agent_takes_its_inbox_file_and_it_is_deleted(client, session):
+    agent_id = add_agent(client, session)
+    upload_to_inbox(client, agent_id, ("a.csv", b"x,y\n1,2\n"), ("b.json", b"{}"))
+    state = client.post("/api/state", json={"accepts_inbox": True}, headers=headers_for("agent-1")).json()
+    assert state["inbox_waiting"] == 2 and state["accepts_inbox"] is True
+    items = client.get("/api/inbox", headers=headers_for("agent-1")).json()
+    assert [i["filename"] for i in items] == ["a.csv", "b.json"]
+    file = client.get(items[0]["file_url"], headers=headers_for("agent-1"))
+    assert file.content == b"x,y\n1,2\n" and "attachment" in file.headers["content-disposition"]
+    assert client.delete(f"/api/inbox/{items[0]['id']}", headers=headers_for("agent-1")).json() == {"deleted": 1}
+    session.expire_all()
+    assert session.get(InboxItem, items[0]["id"]) is None
+    assert session.exec(select(InboxChunk).where(InboxChunk.item_id == items[0]["id"])).all() == []
+    assert "Inbox: agent received a.csv" in client.get(f"/dashboard/agents/{agent_id}/events", auth=TEST_AUTH).text
+    assert client.post("/api/state", json={}, headers=headers_for("agent-1")).json()["inbox_waiting"] == 1
+
+
+def test_inbox_is_private_to_its_agent(client, session):
+    one = add_agent(client, session, "agent-1")
+    add_agent(client, session, "agent-2")
+    upload_to_inbox(client, one, ("secret.csv", b"private"))
+    item_id = session.exec(select(InboxItem)).one().id
+    assert client.get("/api/inbox", headers=headers_for("agent-2")).json() == []
+    assert client.get(f"/api/inbox/{item_id}/file", headers=headers_for("agent-2")).status_code == 404
+    assert client.delete(f"/api/inbox/{item_id}", headers=headers_for("agent-2")).status_code == 404
+    assert session.get(InboxItem, item_id) is not None
+
+
+def test_inbox_refuses_files_over_the_limit(client, session, monkeypatch):
+    import main
+    agent_id = add_agent(client, session)
+    monkeypatch.setattr(main, "MAX_INBOX_FILE_BYTES", 10)
+    response = upload_to_inbox(client, agent_id, ("ok.csv", b"small"), ("big.csv", b"x" * 11))
+    assert "Uploaded ok.csv. Not uploaded: big.csv is over" in response.text
+    assert [i.filename for i in session.exec(select(InboxItem)).all()] == ["ok.csv"]
+
+
+def test_inbox_has_a_total_size_limit(client, session, monkeypatch):
+    import main
+    agent_id = add_agent(client, session)
+    monkeypatch.setattr(main, "MAX_INBOX_TOTAL_BYTES", 12)
+    upload_to_inbox(client, agent_id, ("first.csv", b"x" * 8))
+    response = upload_to_inbox(client, agent_id, ("second.csv", b"x" * 8))
+    assert "The inbox is full" in response.text
+    assert session.exec(select(func.count(InboxChunk.id))).one() == 1  # nothing of the second was kept
+
+
+def test_you_can_take_a_file_back_out_of_the_inbox(client, session):
+    agent_id = add_agent(client, session)
+    upload_to_inbox(client, agent_id, ("wrong.csv", b"oops"))
+    item_id = session.exec(select(InboxItem)).one().id
+    response = client.post(f"/dashboard/inbox/{item_id}/delete", auth=TEST_AUTH)
+    assert "Removed wrong.csv" in response.text and "Nothing waiting" in response.text
+    assert session.exec(select(InboxChunk)).all() == []
+    assert client.post(f"/dashboard/inbox/{item_id}/delete", auth=TEST_AUTH).status_code == 404
+
+
+def test_inbox_needs_login_csrf_and_a_key(client, session):
+    agent_id = add_agent(client, session)
+    files = [("files", ("a.csv", b"1", "text/csv"))]
+    assert client.post(f"/dashboard/agents/{agent_id}/inbox", files=files).status_code == 401
+    del client.headers["X-CSRF-Token"]
+    assert client.post(f"/dashboard/agents/{agent_id}/inbox", files=files, auth=TEST_AUTH).status_code == 403
+    assert client.get("/api/inbox").status_code == 401
+    assert session.exec(select(InboxItem)).all() == []
+
+
+def test_agent_page_shows_the_inbox(client, session):
+    agent_id = add_agent(client, session)
+    page = client.get(f"/dashboard/agents/{agent_id}", auth=TEST_AUTH).text
+    assert "open-inbox" in page and "hasn't switched its inbox on yet" in page
+    upload_to_inbox(client, agent_id, ("a.csv", b"1"), ("b.csv", b"2"))
+    client.post("/api/state", json={"accepts_inbox": True}, headers=headers_for("agent-1"))
+    page = client.get(f"/dashboard/agents/{agent_id}", auth=TEST_AUTH).text
+    assert '<span class="badge badge-sm">2</span>' in page and "switched its inbox on yet" not in page
+
+
+def test_deleting_an_agent_deletes_its_inbox(client, session):
+    agent_id = add_agent(client, session)
+    upload_to_inbox(client, agent_id, ("a.csv", b"1"))
+    client.post(f"/dashboard/agents/{agent_id}/delete", data={"password": TEST_EDIT_PASSWORD}, auth=TEST_AUTH)
+    assert session.exec(select(InboxItem)).all() == [] and session.exec(select(InboxChunk)).all() == []
+
+
+def test_connector_check_in_says_it_reads_its_inbox(monkeypatch, fake_site, tmp_path):
+    connector = load_connector(monkeypatch, fake_site["url"], "agent-key-0123456789", tmp_path)
+    fake_site["status"], fake_site["body"] = 200, b'{"paused": false, "inbox_waiting": 0}'
+    connector.accept_inbox(lambda item, path: None)
+    body = json.loads(fake_site["requests"][-1]["body"])
+    assert body["accepts_inbox"] is True
+
+
+def test_connector_hands_inbox_files_over_then_confirms(monkeypatch, fake_site, tmp_path):
+    connector = load_connector(monkeypatch, fake_site["url"], "agent-key-0123456789", tmp_path)
+    fake_site["status"], fake_site["body"] = 200, b"a,b\n1,2\n"  # the file's bytes
+    items = [{"id": 1, "filename": "good.csv"}, {"id": 2, "filename": "later.csv"}, {"id": 3, "filename": "bad.csv"}]
+    monkeypatch.setattr(connector, "inbox", lambda: items)
+    confirmed, seen = [], {}
+    monkeypatch.setattr(connector, "confirm_inbox", lambda item: confirmed.append(item["id"]) or True)
+    monkeypatch.setattr(connector, "report", lambda *args, **kwargs: True)
+
+    def on_file(item, path):
+        seen[item["filename"]] = path.read_bytes()
+        if item["filename"] == "later.csv":
+            return False  # not now: keep it in the inbox
+        if item["filename"] == "bad.csv":
+            raise ValueError("can't parse")
+
+    connector._inbox_handler = on_file
+    connector._check_inbox()
+    assert seen == {"good.csv": b"a,b\n1,2\n", "later.csv": b"a,b\n1,2\n", "bad.csv": b"a,b\n1,2\n"}
+    assert confirmed == [1]  # only the one that was stored; the others are offered again next time
+
+
+def test_connector_download_inbox_streams_to_a_file(monkeypatch, fake_site, tmp_path):
+    connector = load_connector(monkeypatch, fake_site["url"], "agent-key-0123456789", tmp_path)
+    fake_site["status"], fake_site["body"] = 200, b"payload"
+    path = connector.download_inbox({"id": 7, "filename": "../../etc/data.csv"}, save_to=tmp_path / "out.csv")
+    assert path.read_bytes() == b"payload" and fake_site["requests"][-1]["path"] == "/api/inbox/7/file"
+    temp = connector.download_inbox({"id": 7, "filename": "../../etc/data.csv"})
+    assert temp.name == "data.csv" and temp.read_bytes() == b"payload"  # never outside its temporary folder

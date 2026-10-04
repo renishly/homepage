@@ -12,6 +12,8 @@ What it does:
      output made just before is held until you press Start.
   4. Also sends "starts" (a number), "messages" (text) and "links" (a link)
      outputs, so you can try the Outputs section's filters and pin.
+  5. Takes files you upload to its Inbox on the dashboard and keeps them in
+     agent/received/ (a real agent would load them into its own database).
 
 Before running it, add an agent on the dashboard ("Add Agent" card) and copy
 its API key. Then (with the website running):
@@ -24,6 +26,7 @@ https://your-service.onrender.com or any other address your dashboard has.
 """
 
 import os
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -42,6 +45,7 @@ os.environ.setdefault("DASHBOARD_URL", "http://127.0.0.1:8000")
 sys.path.insert(0, str(APP_DIR / "connector"))
 import dashboard_connector  # noqa: E402
 from dashboard_connector import (  # noqa: E402
+    accept_inbox,
     accept_messages,
     listen,
     output,
@@ -81,6 +85,21 @@ def handle_message(text: str) -> None:
     output(f"Message received: {text}", "messages")
 
 
+RECEIVED_DIR = Path(__file__).resolve().parent / "received"
+
+
+def handle_inbox_file(item: dict, path: Path) -> None:
+    """A file you uploaded to this agent's Inbox. Keep it (a real agent might
+    load it into its own database instead). Once this returns, the dashboard
+    deletes its copy."""
+    RECEIVED_DIR.mkdir(exist_ok=True)
+    target = RECEIVED_DIR / Path(item["filename"]).name  # just the name, never another folder
+    shutil.copy(path, target)
+    note = f' (note: "{item["note"]}")' if item.get("note") else ""
+    report(f"Stored inbox file {item['filename']} in agent/received/{note}")
+    output(f"{item['filename']}: {item['size']} bytes", "inbox files")
+
+
 def main() -> None:
     if dashboard_connector.PROBLEM:
         sys.exit("Fix the setting above, then run the agent again.")
@@ -88,6 +107,7 @@ def main() -> None:
     print(f"Agent connecting to {dashboard_connector.DASHBOARD_URL} (Ctrl+C to stop)")
     listen(handle)
     accept_messages(handle_message)  # switches on the dashboard's message box
+    accept_inbox(handle_inbox_file)  # takes files you upload to its Inbox
     # This demo runs all the time, so it checks in in the background. Every 5
     # seconds keeps Start/Pause and messages quick; a real agent might use 30-300.
     start_check_ins(every=5)

@@ -1,0 +1,30 @@
+{# The Inbox window's list: files waiting for this agent. HTMX checks it every
+   5 seconds while the window is open, so a file disappears once the agent
+   has taken it. inbox_error / inbox_notice: the result of an upload or removal. #}
+{% if inbox_error %}
+<div role="alert" class="alert alert-error alert-soft text-sm">{{ inbox_error }}</div>
+{% elif inbox_notice %}
+<div role="status" class="alert alert-success alert-soft text-sm">{{ inbox_notice }}</div>
+{% endif %}
+
+{% if inbox %}
+<ul class="divide-y divide-(--color-base-300)">
+  {% for item in inbox %}
+  <li class="flex flex-wrap items-center gap-x-3 gap-y-1 py-2">
+    <div class="min-w-0 flex-1">
+      <a href="/dashboard/inbox/{{ item.id }}/file" class="link break-all">{{ item.filename }}</a>
+      <p class="text-xs text-base-content/60 font-mono">
+        {{ "%.1f MB" | format(item.size / 1048576) if item.size >= 1048576 else ("%.1f KB" | format(item.size / 1024) if item.size >= 1024 else item.size ~ " B") }}
+        &middot; {{ item.uploaded_at.strftime("%Y-%m-%d %H:%M") }} UTC &middot; waiting
+      </p>
+      {% if item.note %}<p class="text-sm whitespace-pre-line break-words">{{ item.note }}</p>{% endif %}
+    </div>
+    <button type="button" class="btn btn-ghost btn-xs"
+            hx-post="/dashboard/inbox/{{ item.id }}/delete" hx-target="#inbox-list"
+            hx-confirm="Take {{ item.filename }} back out of the inbox? The agent won't get it.">Remove</button>
+  </li>
+  {% endfor %}
+</ul>
+{% else %}
+<p class="py-3 text-sm text-base-content/60">Nothing waiting. Files you upload wait here until {{ agent.name }} takes them.</p>
+{% endif %}

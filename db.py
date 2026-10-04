@@ -71,6 +71,9 @@ class Agent(SQLModel, table=True):
     # Set by the agent (accept_messages() in the connector). Until it says it
     # accepts messages, the dashboard's message box is switched off.
     accepts_messages: bool = False
+    # Set by the agent (accept_inbox() in the connector): it picks up files
+    # you upload to its Inbox. You can upload before that; they just wait.
+    accepts_inbox: bool = False
     # How often the agent says it checks in, in seconds (from every few seconds
     # to once a day). The dashboard counts it as "online" while it keeps to that
     # rhythm. None until the agent declares one (then a default is assumed).
@@ -151,6 +154,33 @@ class CategoryNotification(SQLModel, table=True):
 
     agent_id: int = Field(foreign_key="agent.id", primary_key=True)
     category: str = Field(primary_key=True)
+
+
+class InboxItem(SQLModel, table=True):
+    """A file you uploaded to one agent's Inbox, waiting for that agent.
+
+    The agent downloads it at a check-in, stores the data its own way, and
+    confirms; the item (and its file) is then deleted. Only that agent can
+    see or take it.
+    """
+
+    id: int | None = Field(default=None, primary_key=True)
+    agent_id: int = Field(foreign_key="agent.id", index=True)
+    filename: str
+    content_type: str
+    size: int  # bytes
+    note: str | None = None  # an optional note you typed with the upload
+    uploaded_at: datetime = Field(default_factory=utc_now)
+
+
+class InboxChunk(SQLModel, table=True):
+    """One piece (up to 1 MB) of an inbox file. Large files are stored and sent
+    piece by piece, so they never have to fit in the server's memory at once."""
+
+    id: int | None = Field(default=None, primary_key=True)
+    item_id: int = Field(foreign_key="inboxitem.id", index=True)
+    position: int  # 0, 1, 2... the order of the pieces
+    data: bytes = Field(sa_column=Column(LargeBinary, nullable=False))
 
 
 class LoginSession(SQLModel, table=True):

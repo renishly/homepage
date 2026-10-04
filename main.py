@@ -16,11 +16,11 @@ from typing import Any
 from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
-from sqlmodel import Session, func, select
+from sqlmodel import Session, delete, func, select
 
 # Importing db also loads your .env file (see the top of db.py).
 from db import (
@@ -30,6 +30,8 @@ from db import (
     Command,
     Event,
     Folder,
+    InboxChunk,
+    InboxItem,
     Output,
     OutputFile,
     create_db_and_tables,
@@ -80,6 +82,14 @@ MAX_CATEGORY = 50
 MAX_OUTPUT_TEXT = 20_000  # characters, for text and lists/dicts
 MAX_OUTPUT_FILE_BYTES = 5 * 1024 * 1024  # 5 MB; files are stored in the database
 MAX_URL = 2000
+
+# The Inbox (files you upload for one agent, waiting until it takes them)
+MAX_INBOX_FILE_BYTES = 50 * 1024 * 1024  # 50 MB per file
+# All waiting inbox files together, on every agent. The free dashboard
+# database is small, and waiting files are stored in it until picked up.
+MAX_INBOX_TOTAL_BYTES = 200 * 1024 * 1024
+INBOX_CHUNK_BYTES = 1024 * 1024  # files are stored and sent in 1 MB pieces
+MAX_INBOX_NOTE = 1000
 OUTPUTS_SHOWN = 50
 # Only these file types are shown inside the page. Anything else (including
 # SVG and HTML, which could run scripts) is only offered as a download.
@@ -756,6 +766,115 @@ def render_agent_header(
 
 
 # ---------------------------------------------------------------------------
+# Helpers: the Inbox (files you upload for one agent; it takes them, then
+# they're deleted). Files are stored in 1 MB pieces (InboxChunk), so even a
+# 50 MB file never has to fit in the server's memory at once.
+# ---------------------------------------------------------------------------
+
+
+class InboxRefused(Exception):
+    """An upload that can't be accepted (too big, or the inbox is full)."""
+
+
+def human_size(size: int) -> str:
+    """Bytes in words: "820 B", "14.2 KB", "3.5 MB"."""
+    if size < 1024:
+        return f"{size} B"
+    if size < 1024 * 1024:
+        return f"{size / 1024:.1f} KB".replace(".0 ", " ")
+    return f"{size / (1024 * 1024):.1f} MB".replace(".0 ", " ")
+
+
+def inbox_items(session: Session, agent_id: int) -> list[InboxItem]:
+    """An agent's waiting inbox files, oldest first."""
+    statement = (
+        select(InboxItem).where(InboxItem.agent_id == agent_id).order_by(InboxItem.uploaded_at, InboxItem.id)
+    )
+    return list(session.exec(statement).all())
+
+
+def inbox_context(session: Session, agent: Agent, error: str | None = None, notice: str | None = None) -> dict:
+    """Data for the Inbox window on an agent's page."""
+    items = inbox_items(session, agent.id)
+    return {"agent": agent, "inbox": items, "inbox_error": error, "inbox_notice": notice,
+            "inbox_max": human_size(MAX_INBOX_FILE_BYTES)}
+
+
+async def store_inbox_file(session: Session, agent: Agent, upload: UploadFile, note: str | None) -> InboxItem:
+    """Save one uploaded file in the agent's Inbox, piece by piece. The caller commits.
+
+    Raises InboxRefused (with nothing saved) if the file is over the limit, or
+    if it would take all waiting inbox files over MAX_INBOX_TOTAL_BYTES.
+    """
+    already_waiting = session.exec(select(func.coalesce(func.sum(InboxItem.size), 0))).one()
+    filename = Path(upload.filename or "upload").name[:200] or "upload"
+    item = InboxItem(
+        agent_id=agent.id,
+        filename=filename,
+        content_type=(upload.content_type or "application/octet-stream")[:100],
+        size=0,
+        note=note,
+    )
+    session.add(item)
+    session.flush()  # gives the item its id, for its pieces
+    size, position = 0, 0
+    while piece := await upload.read(INBOX_CHUNK_BYTES):
+        size += len(piece)
+        if size > MAX_INBOX_FILE_BYTES:
+            session.rollback()
+            raise InboxRefused(f"{filename} is over {human_size(MAX_INBOX_FILE_BYTES)}.")
+        if already_waiting + size > MAX_INBOX_TOTAL_BYTES:
+            session.rollback()
+            raise InboxRefused(
+                f"The inbox is full: waiting files can take up to {human_size(MAX_INBOX_TOTAL_BYTES)} in all. "
+                "Wait for agents to take theirs, or remove some."
+            )
+        chunk = InboxChunk(item_id=item.id, position=position, data=piece)
+        session.add(chunk)
+        session.flush()
+        session.expunge(chunk)  # let each piece's bytes go once they're in the database
+        position += 1
+    item.size = size
+    session.add(item)
+    return item
+
+
+def inbox_file_pieces(session: Session, item: InboxItem):
+    """The file's bytes, one stored piece at a time (for streaming it out)."""
+    piece_ids = session.exec(
+        select(InboxChunk.id).where(InboxChunk.item_id == item.id).order_by(InboxChunk.position)
+    ).all()
+    for piece_id in piece_ids:
+        piece = session.get(InboxChunk, piece_id)
+        data = piece.data
+        session.expunge(piece)  # don't keep every piece in memory
+        yield data
+
+
+def inbox_file_response(session: Session, item: InboxItem) -> StreamingResponse:
+    """Send an inbox file as a download, streamed piece by piece."""
+    return StreamingResponse(
+        inbox_file_pieces(session, item),
+        media_type=item.content_type,
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(item.filename)}",
+            "Content-Length": str(item.size),
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+def delete_inbox_item(session: Session, item: InboxItem) -> None:
+    """Delete a waiting inbox file and its pieces. The caller commits."""
+    session.exec(delete(InboxChunk).where(InboxChunk.item_id == item.id))
+    session.delete(item)
+
+
+def render_inbox_list(session: Session, agent: Agent, error: str | None = None, notice: str | None = None) -> str:
+    return render_partial("partials/inbox_list.html", inbox_context(session, agent, error, notice))
+
+
+# ---------------------------------------------------------------------------
 # Public pages
 # ---------------------------------------------------------------------------
 
@@ -1060,6 +1179,7 @@ def agent_detail(
         agent_header_context(session, agent)
         | outputs_context(session, agent)  # first visit: nothing chosen, unless pinned
         # "Back" returns to the All Agents page this agent is on.
+        | inbox_context(session, agent)
         | {"back_page": page_of(session, agent), "version": monitor_version(agent)}
     )
     return templates.TemplateResponse(request, "agent.html", context)
@@ -1353,6 +1473,90 @@ def messages_ready(
     return HTMLResponse("", headers={"HX-Refresh": "true"})
 
 
+@app.get("/dashboard/agents/{agent_id}/inbox", response_class=HTMLResponse)
+def agent_inbox(
+    agent_id: int,
+    seen: str | None = None,
+    session: Session = Depends(get_session),
+    user: str = Depends(require_user),
+):
+    """The Inbox window's list of waiting files. Checked every 5 seconds while
+    the window is open, so files disappear as the agent takes them."""
+    agent = get_agent_or_404(session, agent_id)
+    return poll_reply(render_inbox_list(session, agent), seen, "inbox-seen")
+
+
+@app.post(
+    "/dashboard/agents/{agent_id}/inbox",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_csrf)],
+)
+async def upload_to_inbox(
+    agent_id: int,
+    files: list[UploadFile] = File(...),
+    note: str = Form(""),
+    session: Session = Depends(get_session),
+    user: str = Depends(require_user),
+):
+    """Put one or more files in an agent's Inbox (up to 50 MB each)."""
+    agent = get_agent_or_404(session, agent_id)
+    note = note.strip()[:MAX_INBOX_NOTE] or None
+    stored = []
+    for upload in files:
+        if not upload.filename:
+            continue  # the form was sent with no file chosen
+        try:
+            item = await store_inbox_file(session, agent, upload, note)
+        except InboxRefused as refusal:
+            done = f"Uploaded {', '.join(stored)}. " if stored else ""
+            return HTMLResponse(render_inbox_list(session, agent, error=done + f"Not uploaded: {refusal}"))
+        log_activity(session, agent.id, "inbox", f"Inbox: you uploaded {item.filename} ({human_size(item.size)})")
+        session.commit()
+        stored.append(item.filename)
+    if not stored:
+        return HTMLResponse(render_inbox_list(session, agent, error="Choose a file to upload."))
+    return HTMLResponse(render_inbox_list(session, agent, notice=f"Uploaded {', '.join(stored)}."))
+
+
+def get_inbox_item_or_404(session: Session, item_id: int) -> InboxItem:
+    item = session.get(InboxItem, item_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Inbox file not found (the agent may have taken it already)")
+    return item
+
+
+@app.get("/dashboard/inbox/{item_id}/file")
+def inbox_file(
+    item_id: int,
+    session: Session = Depends(get_session),
+    user: str = Depends(require_user),
+):
+    """Download a waiting inbox file (to check what you uploaded)."""
+    return inbox_file_response(session, get_inbox_item_or_404(session, item_id))
+
+
+@app.post(
+    "/dashboard/inbox/{item_id}/delete",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_csrf)],
+)
+def remove_from_inbox(
+    item_id: int,
+    session: Session = Depends(get_session),
+    user: str = Depends(require_user),
+):
+    """Take a waiting file back out of an agent's Inbox."""
+    item = session.get(InboxItem, item_id)
+    if item is None:  # already taken by the agent: just show the current list
+        raise HTTPException(status_code=404, detail="Inbox file not found (the agent may have taken it already)")
+    agent = get_agent_or_404(session, item.agent_id)
+    filename = item.filename
+    log_activity(session, agent.id, "inbox", f"Inbox: you removed {filename} before the agent took it")
+    delete_inbox_item(session, item)
+    session.commit()
+    return HTMLResponse(render_inbox_list(session, agent, notice=f"Removed {filename}."))
+
+
 @app.post(
     "/dashboard/agents/{agent_id}/rename",
     response_class=HTMLResponse,
@@ -1468,6 +1672,8 @@ def delete_agent(
     for model in (Event, Command, AgentFolderLink, CategoryNotification):
         for row in session.exec(select(model).where(model.agent_id == agent.id)):
             session.delete(row)
+    for item in session.exec(select(InboxItem).where(InboxItem.agent_id == agent.id)).all():
+        delete_inbox_item(session, item)
     monitor_file = session.get(OutputFile, agent.monitor_file_id) if agent.monitor_file_id else None
     session.delete(agent)
     if monitor_file is not None:
@@ -1612,6 +1818,7 @@ class StateIn(BaseModel):
     """What the connector sends when it checks in. Leave a field out to keep it as it is."""
 
     accepts_messages: bool | None = None
+    accepts_inbox: bool | None = None
     # How often this agent checks in, in seconds (1 second to 1 week).
     check_in_every: int | None = Field(default=None, ge=MIN_CHECK_IN, le=MAX_CHECK_IN)
 
@@ -1625,13 +1832,16 @@ def agent_state(
     """An agent's check-in, as often as the agent itself decides.
 
     The agent can say how often it checks in (so the dashboard knows when to
-    show it as offline) and whether it accepts messages, and it learns whether
-    it's paused. Any API call marks the agent as seen; this is the one meant
+    show it as offline) and whether it accepts messages and reads its Inbox,
+    and it learns whether it's paused and how many Inbox files are waiting. Any API call marks the agent as seen; this is the one meant
     for checking in.
     """
     changed = False
     if state_in.accepts_messages is not None and agent.accepts_messages != state_in.accepts_messages:
         agent.accepts_messages = state_in.accepts_messages
+        changed = True
+    if state_in.accepts_inbox is not None and agent.accepts_inbox != state_in.accepts_inbox:
+        agent.accepts_inbox = state_in.accepts_inbox
         changed = True
     if state_in.check_in_every is not None and agent.check_in_seconds != state_in.check_in_every:
         agent.check_in_seconds = state_in.check_in_every
@@ -1640,11 +1850,60 @@ def agent_state(
         session.add(agent)
         session.commit()
         session.refresh(agent)
+    waiting = session.exec(select(func.count(InboxItem.id)).where(InboxItem.agent_id == agent.id)).one()
     return {
         "paused": agent.paused,
         "accepts_messages": agent.accepts_messages,
+        "accepts_inbox": agent.accepts_inbox,
+        "inbox_waiting": waiting,  # files waiting in this agent's Inbox
         "check_in_every": check_in_interval(agent),
     }
+
+
+def inbox_item_info(item: InboxItem) -> dict:
+    return {"id": item.id, "filename": item.filename, "content_type": item.content_type, "size": item.size,
+            "note": item.note, "uploaded_at": iso(item.uploaded_at), "file_url": f"/api/inbox/{item.id}/file"}
+
+
+def own_inbox_item(session: Session, agent: Agent, item_id: int) -> InboxItem:
+    """One of the calling agent's own inbox files. Another agent's looks "not found"."""
+    item = session.get(InboxItem, item_id)
+    if item is None or item.agent_id != agent.id:
+        raise HTTPException(status_code=404, detail="Inbox file not found")
+    return item
+
+
+@app.get("/api/inbox")
+def api_inbox(
+    agent: Agent = Depends(require_agent),
+    session: Session = Depends(get_session),
+) -> list[dict]:
+    """The files waiting in the calling agent's Inbox, oldest first."""
+    return [inbox_item_info(item) for item in inbox_items(session, agent.id)]
+
+
+@app.get("/api/inbox/{item_id}/file")
+def api_inbox_file(
+    item_id: int,
+    agent: Agent = Depends(require_agent),
+    session: Session = Depends(get_session),
+) -> StreamingResponse:
+    """Download one of the calling agent's inbox files (streamed in pieces)."""
+    return inbox_file_response(session, own_inbox_item(session, agent, item_id))
+
+
+@app.delete("/api/inbox/{item_id}")
+def api_inbox_received(
+    item_id: int,
+    agent: Agent = Depends(require_agent),
+    session: Session = Depends(get_session),
+) -> dict:
+    """The agent confirms it has stored an inbox file: it's deleted from the dashboard."""
+    item = own_inbox_item(session, agent, item_id)
+    log_activity(session, agent.id, "inbox", f"Inbox: agent received {item.filename} ({human_size(item.size)})")
+    delete_inbox_item(session, item)
+    session.commit()
+    return {"deleted": 1}
 
 
 @app.get("/api/commands")

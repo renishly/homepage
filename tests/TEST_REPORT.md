@@ -734,6 +734,31 @@ This was run when agents still identified themselves by `AGENT_NAME`.
 - **Follow-up: stronger rush.** At the user's request, the page-load rush now covers 6 loops instead of 3 in the same 1.15 s. The sheet was enlarged so its edges stay out of view; checked at the rush's start, mid-rush, and through the drift, on 1920×1080 and 375×812 screens.
 - **Tests:** 1 more test; all 304 pass.
 
+## 3u. Icon control buttons, and a rush that carries on
+
+**Result: PASSED** (automated tests and the browser).
+
+- **Icons:** Start, Pause, Send, Message (phones) and a new Inbox button are icons (Heroicons, MIT), each with its name as a tooltip and for screen readers. The grid cards' Start/Pause match. On phones the order is Start, Pause, Inbox, Message, matching the wide-screen Controls (see 3v for the Inbox). Checked on the agent page at wide and phone sizes; the stylesheet was rebuilt for the new icon sizes.
+- **Rush, reported problem:** each page restarted the grid from the same spot, so it seemed to snap back before rushing.
+- **Fix:** `static/grid.js` saves the grid's position (per browser tab) when leaving a page, and the next page carries on from there (checked: the previous page left it at 0.975 of a loop; the next page picked up at 0.994, the difference being the load time). The rush is now a burst of speed in the drift itself: 30 loops (about 3,500 px, about 5 times further than before) over 1.6 s (later shortened at the user's request to 24 loops in 1.3 s, keeping the same starting speed), easing out, then the drift continues from wherever it ended. The sheet only ever moves within one loop, so it could be made smaller again.
+- **Bug found and fixed while testing:** the rush was timed from page load, so in a tab not yet on screen it had "finished" before the first frame. It's now timed from the first frame drawn, so a page opened in a background tab rushes when first looked at.
+- **Without JavaScript or with "reduce motion":** the grid drifts (or stays still) as before.
+- **Tests:** all 304 pass.
+
+## 3v. The Inbox
+
+**Result: PASSED** (automated tests, and a real run with the demo agent).
+
+- **What it is:** on an agent's page, the Inbox button opens a window to upload files for that agent (up to 50 MB each, with an optional note). They wait in the dashboard's database, visible only to that agent, until it takes them at a check-in and confirms; then they're deleted. Activity shows "Inbox: you uploaded…" and "Inbox: agent received…".
+- **Storage:** files are stored and sent in 1 MB pieces (`InboxItem`, `InboxChunk`), so a large file never has to fit in the server's memory. Waiting files on all agents together are capped at 200 MB; a refused upload keeps nothing.
+- **Agent side:** `accept_inbox(on_file)` in the connector downloads each waiting file to a temporary copy (streamed), calls `on_file(item, path)`, and confirms only if it returns normally. If it raises or returns `False`, the file stays for the next check-in. Also `inbox()`, `download_inbox()`, `confirm_inbox()`. The AI-assistant prompt describes the same.
+- **Real run:** uploaded a 60-byte CSV and a 3 MB file (stored as 3 pieces) to a new "inbox-demo" agent before it was running; the agent page showed "2" on both Inbox buttons. Started the demo agent: it took both straight away, the received files were byte-for-byte identical, and the dashboard deleted both items and all their pieces.
+- **Bugs found and fixed while testing:**
+  - the wide-screen Inbox button did nothing (it wasn't inside an Alpine component);
+  - pop-up windows had become hard to read (55% see-through, with the blur removed for speed): they're now solid, over a paper-coloured veil;
+  - the warning in the Inbox window was split into odd columns.
+- **Tests:** 12 new tests (upload in pieces, taking and deleting, privacy between agents, size limits, removing, login/CSRF/key, the page, agent deletion, and the connector's hand-over, keep-for-later and safe downloads); all 316 pass.
+
 ## 4. Known limitations and things not verified
 
 - **Render:** deployment was not tested. Only the user can do that, following the README. `render.yaml` parses as valid YAML and its field names were checked against Render's Blueprint reference, but Render itself has not validated it.
@@ -747,6 +772,7 @@ This was run when agents still identified themselves by `AGENT_NAME`.
 - **No guessing limit:** wrong agent editing passwords are not rate-limited. Use one that's hard to guess.
 - **Encryption secret:** if `KEY_ENCRYPTION_SECRET` is lost or changed, stored keys can't be viewed any more (the agents keep working). Replace key fixes each agent.
 - **Sub-folder hosting:** the dashboard must be served at the root of a domain or subdomain, not under a sub-folder, because its pages use links starting with `/`.
+- **Inbox files that are never taken** stay until you remove them (they count towards the 200 MB cap). There's no automatic expiry yet.
 - **Storage:** output files live in the database, up to 5 MB each. Agents can delete their own old outputs, but there's no automatic clean-up on the dashboard's side yet. On a small free database, many files will fill it up.
 - **Shared reading:** any agent key can read every agent's data. A leaked key exposes all agents' outputs, activity and monitors (but never keys or your messages), until it's replaced.
 - **Deletes aren't buffered:** a delete made while the dashboard is unreachable is not retried, and it doesn't affect outputs still waiting in the agent's offline buffer.

@@ -661,7 +661,7 @@ This was run when agents still identified themselves by `AGENT_NAME`.
 **Result: PASSED**, checked in the browser at a wide window and at phone size, after one fix.
 
 - **Home:** yellow graph-paper page, the name "Ren" in IBM Plex Mono (letters stretched 10% wider) typing itself out, centred on the name alone (the blinking cursor sits just after it without affecting the centring), and a black "Open agent dashboard" button with yellow text.
-- **Dashboard:** same layout. See-through deep-yellow cards (`#fff466` at 55%, lightly blurred) with black borders and hard shadows that lift on hover; the folders sidebar the same `#ffff83` as the page, see-through (45%); Start in vibrant yellow and Pause in white; the active folder in black; the pulsing light on "online".
+- **Dashboard:** same layout. See-through deep-yellow cards (`#fff466` at 55%; the light blur was later removed for speed, see 3t) with black borders and hard shadows that lift on hover; the folders sidebar the same `#ffff83` as the page, see-through (45%); Start in vibrant yellow and Pause in white; the active folder in black; the pulsing light on "online".
 - **Background grid:** squares turned 8° clockwise with a gentle 15° tilt, nearly flat, its near side towards a bearing of about 70° (east-north-east). It fades away on the opposite side and drifts along that bearing; the movement is set to stay on 70° despite the turn, and repeats seamlessly. Measured moving: it rushes in on page load, then drifts.
 - **Second bug found and fixed:** with yellow cards, the grid disappeared. daisyUI paints the page's root element in the card colour, so the body's own yellow background covered the grid. The paper is now painted on the root and the body is transparent, so the grid sits between them.
 - **Agent page:** same layout, with Controls still in the right-hand column. "// MONITOR", "// OUTPUTS", "// ACTIVITY" headings; the Monitor PDF works as before.
@@ -713,14 +713,35 @@ This was run when agents still identified themselves by `AGENT_NAME`.
 - **Agents are unaffected:** the API still needs only the agent's key.
 - **Tests:** 18 new tests (sign-in, wrong passwords, separate devices, logout, sign out all, expiry, password change, redirects for pages and HTMX, safe return addresses, cookie flags, no-store); all 299 pass.
 
+## 3t. Lighter on the browser
+
+**Result: PASSED** (automated tests and the browser; the effect on other tabs can't be measured from here).
+
+- **Report:** the site made the browser, including other tabs, feel heavy.
+- **Causes found:**
+  - the background grid was moved by changing `background-position`, so the browser repainted a full-screen, 3D-tilted, faded layer about 60 times a second;
+  - every card and the sidebar blurred what was behind them, recalculated every frame because the grid behind kept moving;
+  - the grid, Activity and Outputs were rebuilt every 3 seconds even when nothing had changed, and kept polling in hidden tabs (with Tailwind's in-browser script rescanning each time).
+- **Fixes:**
+  - The grid is drawn once and only moved (an animated transform, done by the graphics card without repainting). It loops by 2 squares across and 1 down (about 1.5 degrees off the old 70-degree bearing) at the same speed; the page-load rush now covers 3 loops. The fade is now a fixed paper-coloured overlay painted once. Screenshots before and after match closely (fade strength tuned to match).
+  - No blur behind cards, pop-ups and the sidebar (still just as see-through).
+  - Self-refreshing sections send a fingerprint of what they show; the server answers "204 No Content" when nothing changed, and HTMX leaves the page alone. In the browser: the first grid check returned 15 KB, later ones 204 with about 300 bytes.
+  - All self-refreshing (grid, Outputs, Activity, Monitor, messages check) pauses while the tab is hidden.
+  - The stylesheet address now carries a fingerprint of the file (`theme.css?v=...`), so browsers fetch a changed stylesheet right after a deploy instead of using an old saved copy (found while testing).
+- **No console errors** on the dashboard or agent page; the Outputs Filter still works.
+- **Tests:** 4 new tests; all 303 pass.
+- **Follow-up: Tailwind built ahead of time.** The in-browser Tailwind script (about 270 KB of JavaScript that worked out styles on every page) is replaced by `static/tailwind.css` (20 KB), built with Tailwind 4.3.3 from the templates and `main.py`. Every element's computed style (42 properties each) was recorded before and compared after, on the dashboard (266 elements), the agent page with and without the settings window and Filter open (475 each), and home: identical, apart from one button the mouse was hovering over at the time. A test checks the pages link the built file and that it contains classes the templates use.
+- **Follow-up: stronger rush.** At the user's request, the page-load rush now covers 6 loops instead of 3 in the same 1.15 s. The sheet was enlarged so its edges stay out of view; checked at the rush's start, mid-rush, and through the drift, on 1920×1080 and 375×812 screens.
+- **Tests:** 1 more test; all 304 pass.
+
 ## 4. Known limitations and things not verified
 
 - **Render:** deployment was not tested. Only the user can do that, following the README. `render.yaml` parses as valid YAML and its field names were checked against Render's Blueprint reference, but Render itself has not validated it.
 - **Postgres:** not tested against a real database. The `psycopg` driver is installed and the URL conversion is unit-tested, but the tests and the end-to-end check used SQLite.
 - **Browser coverage:** the browser check above ran in one engine (Chromium) only. Other browsers and real phones were not tested.
 - **Timestamps:** SQLite stores them without time-zone information. They are written in UTC and labelled UTC on the dashboard.
-- **Polling:** the grid and the activity log reload every 3 seconds, so new events can take up to 3 seconds to appear.
-- **Refreshing grid:** because the grid is redrawn every 3 seconds, a button that is mid-click exactly when the grid refreshes can miss the click. Clicking again works. Server-Sent Events (see the README's next steps) would avoid this.
+- **Polling:** the grid, Activity and Outputs check every 3 seconds, so new events can take up to 3 seconds to appear (and up to 3 seconds after returning to a hidden tab).
+- **Refreshing grid:** the grid is only redrawn when something on it changed, but a button that is mid-click exactly when that happens can miss the click. Clicking again works. Server-Sent Events (see the README's next steps) would avoid this.
 - **No login attempt limit:** wrong passwords on the login page aren't slowed down or blocked yet. Use a long, unique `DASHBOARD_PASSWORD`.
 - **CSRF token never changes:** the token stays the same until `DASHBOARD_PASSWORD` changes, so anyone who sees a dashboard page's source could reuse it until then. They would still need your login to do anything.
 - **No guessing limit:** wrong agent editing passwords are not rate-limited. Use one that's hard to guess.

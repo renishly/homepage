@@ -33,7 +33,9 @@
       <section class="card bg-base-100 shadow-xl">
         <div class="card-body gap-5">
           <h2 class="card-title">Activity</h2>
-          <div hx-get="/dashboard/agents/{{ agent.id }}/events" hx-trigger="load, every 3s">
+          <div hx-get="/dashboard/agents/{{ agent.id }}/events" hx-trigger="load, every 3s [document.visibilityState === 'visible']"
+               hx-include="#events-seen">
+            <input type="hidden" id="events-seen" name="seen" value="">
             <div class="flex justify-center py-8">
               <span class="loading loading-dots loading-lg"></span>
             </div>
@@ -95,7 +97,7 @@
 <!-- Reloads the page if the agent starts or stops accepting messages, so the
      message box switches on or off (the server answers "nothing changed" otherwise). -->
 <div hx-get="/dashboard/agents/{{ agent.id }}/messages-ready?ready={{ 'true' if agent.accepts_messages else 'false' }}"
-     hx-trigger="every 5s" hx-swap="none"></div>
+     hx-trigger="every 5s [document.visibilityState === 'visible']" hx-swap="none"></div>
 
 <!-- Controls, phones: a bar fixed to the bottom of the screen.
      The message box opens above the buttons when you tap "Message". -->

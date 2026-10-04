@@ -12,7 +12,7 @@ Your personal website, version 1:
 
 Everything is written in Python. The pages use HTML attributes from
 [HTMX](https://htmx.org) and [Alpine.js](https://alpinejs.dev) instead of
-hand-written JavaScript, and [daisyUI](https://daisyui.com) for styling.
+hand-written JavaScript, and [daisyUI](https://daisyui.com) with [Tailwind CSS](https://tailwindcss.com) for styling.
 
 ## How the pieces connect
 
@@ -49,7 +49,7 @@ Each agent decides how often it **checks in**: every few seconds, every few minu
 
 Here's the flow:
 
-1. An agent posts an event, and the dashboard shows it (the grid and the Activity list reload every 3 seconds).
+1. An agent posts an event, and the dashboard shows it. The grid, Activity and Outputs check for changes every 3 seconds; the server answers with an empty "nothing changed" (204) unless something did, so the page is only redrawn when needed. Checks pause while the tab is hidden and resume when you come back.
 2. You click **Start** on a card, or type a message on an agent's page, and a pending command is saved for that agent.
 3. Each agent picks up its own pending commands when it checks in (at whatever rhythm it chose), handles each one, and marks it `done`.
 
@@ -58,6 +58,7 @@ Here's the flow:
 | `main.py` | All the routes (pages, dashboard, API). |
 | `db.py` | Database connection and the tables (`Agent`, `Folder`, `AgentFolderLink`, `Event`, `Command`, `Output`, `OutputFile`, `CategoryNotification`). |
 | `security.py` | The dashboard login (sign-in sessions), CSRF protection, the per-agent API-key check, key encryption, and the agent editing password check. |
+| `static/tailwind.css` | The Tailwind CSS styles the templates use, built ahead of time from `tailwind.input.css` (see "Changing the styles"). |
 | `static/theme.css` | The site's look: the "codepaper" theme (black IBM Plex Mono text on `#ffff83` yellow paper, cards with thin black borders and hard shadows, vibrant yellow `#ffe600` hovers, a tilted background grid that drifts and rushes forward on each page load) and all the animations (page transitions, a typed home title, pressing buttons, snapping pop-ups, sliding toasts, a pulsing "online" light). Change colours here: they're the variables at the top. Animations switch off for visitors who ask their device to reduce motion. |
 | `templates/` | The HTML pages (Jinja2). |
 | `templates/login.html` | The dashboard's login page. |
@@ -289,6 +290,18 @@ pytest -v
 The tests use an in-memory database and fake secrets, so they never touch
 `local.db` or your `.env`. See `tests/TEST_REPORT.md` for the latest results.
 
+## Changing the styles
+
+- **Colours, borders, animations:** edit `static/theme.css`. Nothing to rebuild.
+- **Tailwind class names** in the templates (like `grid-cols-3` or `text-sm`): their styles live in `static/tailwind.css`, which is built ahead of time so browsers don't have to work them out on every page. If you add a class name that isn't used anywhere yet, rebuild that file. It needs [Node.js](https://nodejs.org); in this folder, run:
+
+  ```bash
+  npm install --no-save tailwindcss@4 @tailwindcss/cli@4
+  npx tailwindcss -i tailwind.input.css -o static/tailwind.css --minify
+  ```
+
+  Then commit `static/tailwind.css` along with the template. (`node_modules/` is git-ignored, and Render doesn't need Node.js: it just serves the built file.) If a new class seems to have no effect, a missing rebuild is the likely reason.
+
 ## Deploying to Render
 
 1. **Put the code on GitHub.** Create an empty repository on GitHub (it can be private), then run these from this folder:
@@ -357,7 +370,6 @@ If you ran an earlier version of this project and have an old `local.db`, delete
 ## Suggested next steps
 
 - **Instant updates:** replace the 3-second refresh with Server-Sent Events. HTMX has an SSE extension for this.
-- **Production CSS:** the Tailwind browser build is great for getting started, but it runs in every visitor's browser. Build a small CSS file ahead of time instead with [`pytailwindcss`](https://github.com/timonweb/pytailwindcss).
 - **Limit login attempts:** the login page doesn't slow down repeated wrong passwords yet, so use a long, unique `DASHBOARD_PASSWORD`.
 - **Tidy up old outputs:** agents can already delete their own old outputs (see "Reading other agents' data, and deleting your own"). A dashboard-side automatic clean-up, such as keeping only the last 30 days, would cover agents that don't.
 - **Limit request rates:** an agent (or a leaked key) can send unlimited requests; a per-agent rate limit would stop one from flooding the database.

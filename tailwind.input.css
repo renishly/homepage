@@ -1,0 +1,19 @@
+/* The source for static/tailwind.css, the site's Tailwind CSS utilities.
+
+   Tailwind reads the templates (and main.py, which writes a little HTML)
+   for the class names they use, such as "grid-cols-3" or "text-sm", and
+   writes CSS for just those. Rebuild it after using a class name that isn't
+   used anywhere yet (needs Node.js; see "Changing the styles" in the README):
+
+     npm install --no-save tailwindcss@4 @tailwindcss/cli@4
+     npx tailwindcss -i tailwind.input.css -o static/tailwind.css --minify
+*/
+@import "tailwindcss" source(none);
+@source "./templates";
+@source "./main.py";
+
+@theme {
+  /* IBM Plex Mono everywhere, falling back to the system's monospace font while it loads. */
+  --font-sans: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}

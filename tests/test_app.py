@@ -2423,3 +2423,50 @@ def test_agents_still_use_only_their_key(client, session):
 def test_dashboard_shows_log_out_and_sign_out_all(client):
     page = client.get("/dashboard", auth=TEST_AUTH).text
     assert 'action="/logout"' in page and "Sign out all devices" in page
+
+
+# --- Refreshing sections only when something changed -------------------------
+
+
+def seen_value(response) -> str:
+    return re.search(r'name="seen" value="([0-9a-f]+)"', response.text).group(1)
+
+
+@pytest.mark.parametrize("path, seen_id", [
+    ("/dashboard/grid", "grid-seen"),
+    ("/dashboard/agents/{id}/events", "events-seen"),
+    ("/dashboard/agents/{id}/outputs?all=true", "outputs-seen"),
+])
+def test_unchanged_sections_are_not_resent(client, session, path, seen_id):
+    agent_id = add_agent(client, session)
+    send_output(client, "first")
+    url = path.format(id=agent_id)
+    first = client.get(url, auth=TEST_AUTH)
+    assert f'id="{seen_id}"' in first.text
+    seen = seen_value(first)
+    joiner = "&" if "?" in url else "?"
+    # Nothing changed: an empty "204", so the page isn't rebuilt.
+    unchanged = client.get(f"{url}{joiner}seen={seen}", auth=TEST_AUTH)
+    assert unchanged.status_code == 204 and unchanged.text == ""
+    # Something changed: the new content, with a new fingerprint.
+    send_output(client, "second")
+    changed = client.get(f"{url}{joiner}seen={seen}", auth=TEST_AUTH)
+    assert changed.status_code == 200 and seen_value(changed) != seen
+
+
+def test_refreshing_sections_pause_in_hidden_tabs(client, session):
+    agent_id = add_agent(client, session)
+    pages = client.get("/dashboard", auth=TEST_AUTH).text + client.get(f"/dashboard/agents/{agent_id}", auth=TEST_AUTH).text
+    triggers = re.findall(r'hx-trigger="([^"]*every[^"]*)"', html.unescape(pages))
+    assert len(triggers) == 5  # grid, outputs, activity, monitor, messages-ready
+    assert all("document.visibilityState === 'visible'" in trigger for trigger in triggers)
+
+
+def test_pages_use_the_prebuilt_tailwind_stylesheet(client):
+    page = client.get("/").text
+    assert "@tailwindcss/browser" not in page and "text/tailwindcss" not in page  # no in-browser build
+    href = re.search(r'href="(/static/tailwind\.css\?v=[0-9a-f]+)"', page).group(1)
+    css = client.get(href).text
+    # A few classes the templates use, to catch a stylesheet that wasn't rebuilt.
+    for selector in (".grid-cols-1", ".line-clamp-2", ".min-h-screen", ".whitespace-pre-line"):
+        assert selector in css

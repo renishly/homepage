@@ -10,6 +10,11 @@ local.db
 # The connector's offline buffer (items waiting to be sent)
 dashboard_buffer/
 
+# Node.js tools, only needed to rebuild static/tailwind.css
+node_modules/
+package-lock.json
+package.json
+
 # Python / pytest caches
 __pycache__/
 *.pyc

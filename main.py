@@ -4,6 +4,7 @@ Run locally with:   fastapi dev main.py
 Then open:          http://127.0.0.1:8000
 """
 
+import hashlib
 import html
 import json
 import math
@@ -111,6 +112,12 @@ app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
 # Lets dashboard templates write {{ csrf_token() }} (see security.py).
 templates.env.globals["csrf_token"] = csrf_token
+# Lets templates write {{ static_url("theme.css") }}: the file's address plus a
+# fingerprint of its contents, so browsers fetch it again whenever it changes
+# (instead of using an old copy they kept) but never otherwise.
+templates.env.globals["static_url"] = lambda name: (
+    f"/static/{name}?v={hashlib.sha256((BASE_DIR / 'static' / name).read_bytes()).hexdigest()[:10]}"
+)
 # Lets templates write {{ agent | check_in_text }}, e.g. "every 5 min".
 templates.env.filters["check_in_text"] = lambda agent: "every " + human_interval(check_in_interval(agent))
 
@@ -430,6 +437,21 @@ def outputs_context(
         "inline_types": INLINE_IMAGE_TYPES,
         "total": total,
     }
+
+
+def poll_reply(content: str, seen: str | None, seen_id: str) -> Response:
+    """The reply to a section that refreshes itself every few seconds.
+
+    If the section's content is exactly what the page already shows, answer
+    "204 No Content": HTMX then leaves the page alone, so nothing is rebuilt
+    (which kept the browser busy). Otherwise send the new content, plus a
+    hidden field holding its fingerprint, which the page sends back as `seen`
+    next time.
+    """
+    fingerprint = hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
+    if seen == fingerprint:
+        return Response(status_code=204)
+    return HTMLResponse(content + f'<input type="hidden" id="{seen_id}" name="seen" value="{fingerprint}">')
 
 
 def render_partial(name: str, context: dict, oob: bool = False) -> str:
@@ -851,14 +873,15 @@ def dashboard_grid(
     request: Request,
     page: int = 1,
     folder: int | None = None,
+    seen: str | None = None,
     session: Session = Depends(get_session),
     user: str = Depends(require_user),
 ):
-    """HTML fragment with one page of the grid. HTMX reloads this every 3 seconds."""
+    """HTML fragment with one page of the grid. HTMX asks for it every 3 seconds
+    (204 if nothing changed; see poll_reply)."""
     current_folder = get_folder_or_404(session, folder) if folder is not None else None
-    return templates.TemplateResponse(
-        request, "partials/agent_grid.html", grid_context(session, page, current_folder)
-    )
+    content = render_partial("partials/agent_grid.html", grid_context(session, page, current_folder))
+    return poll_reply(content, seen, "grid-seen")
 
 
 @app.get("/dashboard/connector/{file_format}")
@@ -1050,6 +1073,7 @@ def agent_outputs(
     sort: str = "date",
     order: str = "desc",
     known: list[str] = Query([]),
+    seen: str | None = None,
     session: Session = Depends(get_session),
     user: str = Depends(require_user),
 ):
@@ -1069,7 +1093,7 @@ def agent_outputs(
     ]
     if sorted(known) != sorted(c["name"] for c in context["categories"]):
         html_parts.append(render_partial("partials/outputs_options.html", context, oob=True))
-    return HTMLResponse("".join(html_parts))
+    return poll_reply("".join(html_parts), seen, "outputs-seen")
 
 
 @app.post(
@@ -1251,10 +1275,12 @@ def toggle_monitor_pin(
 def agent_events(
     request: Request,
     agent_id: int,
+    seen: str | None = None,
     session: Session = Depends(get_session),
     user: str = Depends(require_user),
 ):
-    """HTML fragment with an agent's 50 newest events. HTMX reloads this every 3 seconds."""
+    """HTML fragment with an agent's 50 newest events. HTMX asks for it every
+    3 seconds (204 if nothing changed; see poll_reply)."""
     get_agent_or_404(session, agent_id)
     statement = (
         select(Event)
@@ -1263,7 +1289,7 @@ def agent_events(
         .limit(50)
     )
     events = session.exec(statement).all()
-    return templates.TemplateResponse(request, "partials/events.html", {"events": events})
+    return poll_reply(render_partial("partials/events.html", {"events": events}), seen, "events-seen")
 
 
 @app.post(

@@ -11,7 +11,7 @@
    oob=True: sent alongside the settings header after a change in settings. #}
 <section id="monitor" class="card bg-base-100 shadow-xl" {% if oob %}hx-swap-oob="true"{% endif %}
          hx-get="/dashboard/agents/{{ agent.id }}/monitor?version={{ version }}"
-         hx-trigger="every 10s" hx-swap="outerHTML"
+         hx-trigger="every 10s [document.visibilityState === 'visible']" hx-swap="outerHTML"
          x-data="{ embed: false }">
   <div class="card-body gap-4">
     <div class="flex flex-wrap items-center justify-between gap-2">

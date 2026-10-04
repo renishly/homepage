@@ -81,32 +81,46 @@ body {
                      its 70-degree side towards you. A small tilt keeps the grid
                      close and nearly flat;
      perspective(1300px)  a far-away viewpoint, so squares don't look stretched.
-   The movement (grid-drift, grid-rush below) and the fade (mask-image) are
-   measured on the sheet, so they're set 8 degrees less (242 instead of 250)
-   to still point along the 70-degree bearing on screen. */
+   The movement (grid-drift, grid-rush below) is measured on the sheet, so
+   it's set 8 degrees less to still point along the 70-degree bearing on screen.
+
+   Performance: the grid is drawn once, then only *moved* (an animated
+   transform), which the graphics card does without redrawing anything. (Moving
+   the pattern inside the sheet instead, with background-position, made the
+   browser repaint the whole tilted sheet about 60 times a second, which slowed
+   down other tabs too.) The sheet is a little larger than the screen on every
+   side so its edges never come into view while it moves. */
 body::before {
   content: "";
   position: fixed;
   z-index: -1;
-  top: -60vh;
-  left: -60vw;
-  width: 220vw;
-  height: 220vh;
+  top: calc(-60vh - 800px);
+  left: calc(-60vw - 800px);
+  width: calc(220vw + 1600px);
+  height: calc(220vh + 1600px);
   pointer-events: none;
   background-image:
     linear-gradient(to right, rgb(17 17 17 / 0.2) 1.5px, transparent 1.5px),
     linear-gradient(to bottom, rgb(17 17 17 / 0.2) 1.5px, transparent 1.5px);
   background-size: 52px 52px;
   transform-origin: 50% 50%;
-  transform: perspective(1300px) rotate3d(0.342, 0.940, 0, -15deg) rotateZ(8deg);
-  /* Fade the grid out towards the far side (a bearing of 250 degrees on
-     screen, opposite the near side; 242 on the turned sheet), so it reads as
-     depth. CSS gradient angles work like bearings: 0deg is up, 90deg is right. */
-  mask-image: linear-gradient(242deg, black 30%, transparent 75%);
-  -webkit-mask-image: linear-gradient(242deg, black 30%, transparent 75%);
+  transform: perspective(1300px) rotate3d(0.342, 0.940, 0, -15deg) rotateZ(8deg) translate(0, 0);
+  will-change: transform;
   animation:
     grid-rush 1.15s cubic-bezier(0.12, 0.85, 0.25, 1),
-    grid-drift 54s linear 1.15s infinite;
+    grid-drift 7.1s linear 1.15s infinite;
+}
+/* The fade: the grid melts into the paper towards the far side (a bearing of
+   250 degrees, opposite the near side), so it reads as depth. It's a fixed
+   layer of paper colour over the grid, painted once and never moving.
+   CSS gradient angles work like bearings: 0deg is up, 90deg is right. */
+body::after {
+  content: "";
+  position: fixed;
+  z-index: -1;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(250deg, transparent 12%, var(--paper) 68%);
 }
 
 ::selection {
@@ -169,18 +183,16 @@ code.block {
 /* Cards, pop-ups and the Filter panel are slightly see-through, so the moving
    grid shows faintly behind them. (Only the background is see-through: text
    and borders stay solid.) */
+/* (No blur behind them: blurring what's behind every card, on top of a moving
+   grid, kept the graphics card busy every frame.) */
 .card:not(.border-dashed),
 .modal-box,
 .shadow-2xl.rounded-box {
   background-color: rgb(255 244 102 / 0.55);
-  backdrop-filter: blur(2px);
-  -webkit-backdrop-filter: blur(2px);
 }
 /* The folders sidebar is the same yellow as the page, and see-through too. */
 .drawer-side aside {
   background-color: rgb(255 255 131 / 0.45);
-  backdrop-filter: blur(2px);
-  -webkit-backdrop-filter: blur(2px);
 }
 
 .card,
@@ -346,9 +358,6 @@ main > *:nth-child(5) { animation-delay: 0.24s; }
 .modal.modal-open .modal-box {
   animation: pop-in 0.26s cubic-bezier(0.2, 0.9, 0.3, 1.25) both;
 }
-.modal.modal-open {
-  backdrop-filter: blur(2px);
-}
 
 /* Toast messages slide in from the right, then fade out before they disappear (after 3 s). */
 .toast .alert {
@@ -385,16 +394,18 @@ main > *:nth-child(5) { animation-delay: 0.24s; }
 }
 
 /* The grid moves along the 70-degree bearing on screen, from the near side
-   towards the far side. On the sheet (turned 8 degrees) that's 15 squares
-   across for every 8 down (52px squares; tan 62 is about 15/8), and whole
-   squares make the pattern repeat seamlessly. 54s keeps the same gentle speed. */
+   towards the far side. On the sheet (turned 8 degrees) that's 2 squares
+   across for every 1 down (52px squares). Moving by whole squares makes each
+   loop repeat seamlessly, and keeps the sheet's edges out of view.
+   7.1s per loop keeps the same gentle speed as before. */
 @keyframes grid-drift {
-  from { background-position: 0 0; }
-  to { background-position: -780px 416px; }
+  from { transform: perspective(1300px) rotate3d(0.342, 0.940, 0, -15deg) rotateZ(8deg) translate(0, 0); }
+  to { transform: perspective(1300px) rotate3d(0.342, 0.940, 0, -15deg) rotateZ(8deg) translate(-104px, 52px); }
 }
+/* On each page load: a quick rush of 6 loops' distance, slowing into the drift. */
 @keyframes grid-rush {
-  from { background-position: 2340px -1248px; }  /* about 51 squares in about a second */
-  to { background-position: 0 0; }
+  from { transform: perspective(1300px) rotate3d(0.342, 0.940, 0, -15deg) rotateZ(8deg) translate(624px, -312px); }
+  to { transform: perspective(1300px) rotate3d(0.342, 0.940, 0, -15deg) rotateZ(8deg) translate(0, 0); }
 }
 @keyframes cursor-blink {
   50% { opacity: 0; }

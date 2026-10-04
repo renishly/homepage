@@ -57,9 +57,10 @@
     </div>
 
     <div id="outputs-list"
-         hx-get="/dashboard/agents/{{ agent.id }}/outputs" hx-trigger="every 3s"
-         hx-include="#outputs-filter" hx-swap="innerHTML">
+         hx-get="/dashboard/agents/{{ agent.id }}/outputs" hx-trigger="every 3s [document.visibilityState === 'visible']"
+         hx-include="#outputs-filter, #outputs-seen" hx-swap="innerHTML">
       {% include "partials/outputs_list.html" %}
+      <input type="hidden" id="outputs-seen" name="seen" value="">
     </div>
   </div>
 </section>

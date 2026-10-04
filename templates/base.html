@@ -14,19 +14,13 @@
   <!-- daisyUI v5 (ready-made components like cards, buttons and alerts) -->
   <link href="https://cdn.jsdelivr.net/npm/daisyui@5" rel="stylesheet" type="text/css">
 
-  <!-- Tailwind CSS v4 browser build: turns class names into styles in the browser.
-       Fine for a personal site; see README "Next steps" for a production build. -->
-  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
-  <style type="text/tailwindcss">
-    @theme {
-      /* Use IBM Plex Mono everywhere, falling back to the system's monospace font while it loads. */
-      --font-sans: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-      --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-    }
-  </style>
+  <!-- Tailwind CSS: the styles for class names like "grid-cols-3" or "text-sm",
+       built ahead of time from the templates (see tailwind.input.css), so the
+       browser doesn't have to work them out on every page. -->
+  <link href="{{ static_url('tailwind.css') }}" rel="stylesheet" type="text/css">
   <!-- The site's look: the "codepaper" colour theme, borders, shadows and animations.
        Loaded after daisyUI so it can adjust daisyUI's components. -->
-  <link href="/static/theme.css" rel="stylesheet" type="text/css">
+  <link href="{{ static_url('theme.css') }}" rel="stylesheet" type="text/css">
   <!-- Hides elements marked x-cloak until Alpine.js has loaded (no flash of hidden forms). -->
   <style>[x-cloak] { display: none !important; }</style>
 

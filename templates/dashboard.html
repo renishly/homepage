@@ -83,11 +83,15 @@
       </div>
       {% endif %}
 
-      <!-- The grid is drawn once here, then HTMX reloads it every 3 seconds
-           so the online badges and latest messages stay up to date. -->
+      <!-- The grid is drawn once here, then HTMX checks it every 3 seconds
+           so the online badges and latest messages stay up to date. It's only
+           redrawn when something changed (the server answers "204" otherwise,
+           using the fingerprint in #grid-seen), and not checked at all while
+           this tab is hidden. -->
       <div hx-get="/dashboard/grid?page={{ page }}{% if current_folder %}&folder={{ current_folder.id }}{% endif %}"
-           hx-trigger="every 3s">
+           hx-trigger="every 3s [document.visibilityState === 'visible']" hx-include="#grid-seen">
         {% include "partials/agent_grid.html" %}
+        <input type="hidden" id="grid-seen" name="seen" value="">
       </div>
 
     </main>

@@ -6,7 +6,12 @@
 # website, and you give it the database's address as DATABASE_URL.
 services:
   - type: web
-    name: homepage
+    # In Singapore, the same region as the Supabase database, close to its
+    # user: every request (and every database question) has less far to go.
+    # A Render service can't change region, so this is a new service, with its
+    # own name; the old "homepage" service in Oregon is deleted by hand.
+    name: homepage-sg
+    region: singapore
     runtime: python
     plan: free  # sleeps when idle; first visit after a while is slow
     buildCommand: pip install -r requirements.txt

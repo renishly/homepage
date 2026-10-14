@@ -16,7 +16,7 @@ from typing import Any
 from urllib.parse import quote
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
@@ -970,7 +970,16 @@ def signed_in_user(request: Request, session: Session) -> str | None:
     return login.username if login else None
 
 
-@app.get("/", response_class=HTMLResponse)
+@app.api_route("/health", methods=["GET", "HEAD"], response_class=PlainTextResponse)
+def health():
+    """For uptime monitors (e.g. UptimeRobot): answers "ok" to GET and HEAD,
+    without touching the database, so frequent checks stay cheap and keep the
+    free Render site awake."""
+    return PlainTextResponse("ok", headers={"Cache-Control": "no-store"})
+
+
+# HEAD too, for monitors and link checkers that only ask for the headers.
+@app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
 def home(request: Request):
     """The front page: the name, the Login button and "as guest?". (Signed in
     or not: clicking Login when you're already signed in goes straight into

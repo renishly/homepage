@@ -2890,3 +2890,10 @@ def test_daisyui_is_built_in_not_loaded_whole(client):
     for selector in (".btn", ".card", ".modal", ".badge", ".alert-success", ".alert-warning", ".toast"):
         assert selector in css
     assert len(css) < 300_000  # the whole of daisyUI is over 1 MB
+
+
+def test_health_check_for_uptime_monitors(client):
+    # UptimeRobot checks with HEAD requests by default; both must answer 200.
+    assert client.get("/health").text == "ok"
+    assert client.head("/health").status_code == 200
+    assert client.head("/").status_code == 200

@@ -2,6 +2,7 @@
 
 Your personal website, version 1:
 
+- **`/health`**: answers "ok" (to GET and HEAD requests) without touching the database: the address to give an uptime monitor such as UptimeRobot, which keeps the free Render site awake.
 - **`/`**: the home page. Signed out: your name with its base on the screen's centre line, a **Login** button below it, and an "as guest?" link that slides out from under it on hover (always shown on phones). Signed in: a "tech tree" of places to go, with you (Ren, or Guest) as the root on the left, joined by dashed lines to **Dashboard**, **Portfolio** and **Data tracking** (the last two marked "soon"). Each card in the tree is called a **tech**. Right after signing in, the Login button glides into the root's place and the tree builds itself. The tree lives at `/tree`; the front page `/` always shows the name and Login (Login goes straight into the tree if you're signed in).
   - Hover the root tech (hold it, on a phone) and it reads "Log out / Hold to sign out". A click goes back to the front page, still signed in. Holding it rewrites "Log out" into "Sign out", a letter at a time, and then signs this device out (holding Space does the same from the keyboard).
   - As Ren, hovering (holding) the root's badge spins it into a cog; clicking the cog switches **developer mode** on or off. It always starts off when the tree opens.

@@ -154,7 +154,7 @@
 
 <!-- Controls, phones: a bar fixed to the bottom of the screen.
      The message box opens above the buttons when you tap the speech bubble. -->
-<div class="fixed inset-x-0 bottom-0 z-30 border-t border-base-300 bg-base-100/95 p-3 shadow-2xl backdrop-blur lg:hidden"
+<div class="fixed inset-x-0 bottom-0 z-30 border-t border-base-300 bg-base-100/95 p-3 shadow-2xl lg:hidden"
      x-data="{ writing: false }" aria-label="Controls">
   {% if agent.accepts_messages %}
   <form x-show="writing" x-cloak class="mb-2 flex gap-2"

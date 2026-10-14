@@ -10,7 +10,6 @@
     <div class="card bg-base-100 w-full shadow-xl">
       <form method="post" action="/login" class="card-body gap-4">
         <h1 class="text-2xl font-bold tracking-tight">Sign in</h1>
-        <p class="text-sm text-base-content/60">Agent Dashboard</p>
 
         {% if signed_out %}
         <div role="status" class="alert alert-success alert-soft text-sm">You're signed out on this device.</div>
@@ -30,7 +29,7 @@
           <input type="password" name="password" required autocomplete="current-password" class="input w-full">
         </fieldset>
         <button type="submit" class="btn btn-primary w-full">Sign in</button>
-        <p class="text-xs text-base-content/50">You stay signed in on this device for a day, or until you log out.</p>
+        <p class="text-xs text-base-content/50">You stay signed in on this device for a day, or until you sign out.</p>
         <a href="/" class="link text-sm">&larr; Home</a>
       </form>
     </div>

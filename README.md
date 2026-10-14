@@ -2,7 +2,10 @@
 
 Your personal website, version 1:
 
-- **`/`**: a public home page (a placeholder for your future portfolio).
+- **`/`**: the home page. Signed out: your name with its base on the screen's centre line, a **Login** button below it, and an "as guest?" link that slides out from under it on hover (always shown on phones). Signed in: a "tech tree" of places to go, with you (Ren, or Guest) as the root on the left, joined by dashed lines to **Dashboard**, **Portfolio** and **Data tracking** (the last two marked "soon"). Each card in the tree is called a **tech**. Right after signing in, the Login button glides into the root's place and the tree builds itself. The tree lives at `/tree`; the front page `/` always shows the name and Login (Login goes straight into the tree if you're signed in).
+  - Hover the root tech (hold it, on a phone) and it reads "Log out / Hold to sign out". A click goes back to the front page, still signed in. Holding it rewrites "Log out" into "Sign out", a letter at a time, and then signs this device out (holding Space does the same from the keyboard).
+  - As Ren, hovering (holding) the root's badge spins it into a cog; clicking the cog switches **developer mode** on or off. It always starts off when the tree opens.
+  - In developer mode, clicking a leaf tech opens its **settings** instead of its page: a three-stop slider sets it to **Open** (guests can open it), **Private** (guests see it greyed out but can't open it) or **Hidden** (guests don't see it), and you can write its description (up to 120 characters; empty restores the original). Also in developer mode, **drag a leaf tech** up or down to rearrange the techs; the order is saved, and guests see it too. Pages with one page-wide API key (for now, Data tracking) also show it there, to view, set or randomize. Only you can change these; the server checks, and keeps guests out of a Private or Hidden dashboard.
 - **`/dashboard`**: a password-protected dashboard for your AI agents.
   - Agents appear as cards in a 3 × 3 grid, with page buttons when they don't all fit.
   - Each card has Start (▷) and Pause (‖) buttons, and the last cell is an **Add Agent** card.
@@ -42,6 +45,7 @@ These are the tables. Each side reads what the other writes:
 - **Output** and **OutputFile**: results an agent chose to share with `output(content, category)`. Files are stored in the database itself, up to 5 MB each, so they survive restarts on any host.
 - **CategoryNotification**: which output categories have the bell turned on.
 - **InboxItem** and **InboxChunk**: files you uploaded to an agent's Inbox, stored in 1 MB pieces, deleted once the agent has taken them.
+- **TechSetting**: each tech's developer-mode settings (Open / Private / Hidden, and a page-wide API key, encrypted).
 - **LoginSession**: one row per signed-in device (only a fingerprint of its token), deleted when it logs out.
 
 **Each agent has its own API key.** The agent sends it in the `X-API-Key` header, and the site uses it to work out which agent is calling. That's why renaming an agent never disconnects it.
@@ -60,6 +64,9 @@ Here's the flow:
 | `db.py` | Database connection and the tables (`Agent`, `Folder`, `AgentFolderLink`, `Event`, `Command`, `Output`, `OutputFile`, `CategoryNotification`). |
 | `security.py` | The dashboard login (sign-in sessions), CSRF protection, the per-agent API-key check, key encryption, and the agent editing password check. |
 | `static/tailwind.css` | The Tailwind CSS styles the templates use, built ahead of time from `tailwind.input.css` (see "Changing the styles"). |
+| `static/home.js` | Draws the home page tree's dashed lines, and plays its build right after signing in. |
+| `static/vendor/` | HTMX and Alpine.js, served by this site (their versions are in the file names). |
+| `static/fonts/` | The IBM Plex Mono font, served by this site, with its licence (`OFL.txt`). |
 | `static/grid.js` | Makes the background grid carry on from where it was on the previous page, and plays its rush on each page load. |
 | `static/theme.css` | The site's look: the "codepaper" theme (black IBM Plex Mono text on `#ffff83` yellow paper, cards with thin black borders and hard shadows, vibrant yellow `#ffe600` hovers, a tilted background grid that drifts and rushes forward on each page load) and all the animations (page transitions, a typed home title, pressing buttons, snapping pop-ups, sliding toasts, a pulsing "online" light). Change colours here: they're the variables at the top. Animations switch off for visitors who ask their device to reduce motion. |
 | `templates/` | The HTML pages (Jinja2). |
@@ -258,6 +265,10 @@ On an agent's page, the **Inbox** button (third in Controls) opens a window wher
     - Closing settings clears any key shown on the page.
   - **Danger zone**: **Delete agent** first asks "are you sure", then needs your `AGENT_EDIT_PASSWORD`. Deleting removes the agent, its outputs (and their files), its activity log and its pending commands, and its key stops working.
 
+**Several accounts on one device:** a device can be signed in as you and as Guest at the same time. **Login** uses the highest-ranked one it has (you, then Guest) and only asks for the password when it has none; "as guest?" uses Guest while keeping your sign-in for the next Login. Holding "sign out" on the root tech signs the device out of all of them.
+
+**Guests:** "as guest?" on the home page signs a device in as `guest` without a password. For now guests can do everything you can, except what needs the agent editing password (viewing or replacing keys, deleting agents). On the live site that means anyone can Start/Pause your agents, message them, upload to their Inboxes, add agents (and so get an API key) and use "Sign out all devices". Restrict it before relying on the site.
+
 **Signing in:** the dashboard has its own login page. Each device (each browser) signs in separately, so signing in on your laptop never lets your phone in.
 - A sign-in lasts **one day**, then that device has to sign in again. An open page notices within a few seconds and goes to the login page, then back to where you were.
 - **Log out** (top right of the dashboard) signs out this device straight away. **Sign out all devices** (in the ⓘ window) signs out every device, for example if you signed in on a borrowed one.
@@ -308,10 +319,10 @@ The tests use an in-memory database and fake secrets, so they never touch
 ## Changing the styles
 
 - **Colours, borders, animations:** edit `static/theme.css`. Nothing to rebuild.
-- **Tailwind class names** in the templates (like `grid-cols-3` or `text-sm`): their styles live in `static/tailwind.css`, which is built ahead of time so browsers don't have to work them out on every page. If you add a class name that isn't used anywhere yet, rebuild that file. It needs [Node.js](https://nodejs.org); in this folder, run:
+- **Class names** in the templates, from Tailwind (like `grid-cols-3` or `text-sm`) or daisyUI (like `btn` or `card`): their styles live in `static/tailwind.css`, built ahead of time with only the parts the site uses (about 135 KB, instead of daisyUI's whole 1.1 MB). If you add a class name that isn't used anywhere yet, rebuild that file. It needs [Node.js](https://nodejs.org); in this folder, run:
 
   ```bash
-  npm install --no-save tailwindcss@4 @tailwindcss/cli@4
+  npm install --no-save tailwindcss@4 @tailwindcss/cli@4 daisyui@5
   npx tailwindcss -i tailwind.input.css -o static/tailwind.css --minify
   ```
 

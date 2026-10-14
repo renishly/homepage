@@ -1,0 +1,18 @@
+{# One leaf tech in the home page's tree. `tech` comes from tech_view() in
+   main.py. In developer mode, clicking it opens its settings instead of its
+   page (static/home.js). oob: sent after a settings change, to replace the
+   card in the tree. #}
+{% import "partials/icons.html" as icon %}
+<li id="tech-{{ tech.slug }}" class="tree-leaf tech-{{ tech.visibility }}" data-tech="{{ tech.slug }}"
+    {% if oob %}hx-swap-oob="true"{% endif %}>
+  {% if tech.can_open %}<a href="{{ tech.href }}" class="tree-card tree-card-open">{% else %}<div class="tree-card tree-card-locked" aria-disabled="true">{% endif %}
+    <span class="tree-badge">{{ icon[tech.icon]() }}</span>
+    <span class="tree-card-body">
+      <span class="tree-card-head">
+        <span class="tree-title">{{ tech.title }}</span>
+        <span class="tree-status">{{ tech.status }}</span>
+      </span>
+      <span class="tree-text">{{ tech.text }}</span>
+    </span>
+  {% if tech.can_open %}</a>{% else %}</div>{% endif %}
+</li>

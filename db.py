@@ -183,6 +183,29 @@ class InboxChunk(SQLModel, table=True):
     data: bytes = Field(sa_column=Column(LargeBinary, nullable=False))
 
 
+class TechSetting(SQLModel, table=True):
+    """Developer-mode settings for one "tech" (a card in the home page's tree).
+
+    The techs themselves (their titles, pages and icons) are defined in
+    main.py; this only stores what you change in developer mode. A tech with
+    no row here is "open".
+    """
+
+    slug: str = Field(primary_key=True)  # e.g. "dashboard", "data-tracking"
+    # "open": guests can open it. "private": guests see it greyed out and can't
+    # open it. "hidden": guests don't see it.
+    visibility: str = "open"
+    # Your own description for the tech, written in developer mode (None: the
+    # one it comes with).
+    description: str | None = None
+    # Where it sits among the leaf techs (0 = top), after you drag it in
+    # developer mode. None: its place in main.py's list.
+    position: int | None = None
+    # The page-wide API key, for pages that have one (encrypted like agent
+    # keys, so it can be shown again; see security.py).
+    api_key_encrypted: str | None = None
+
+
 class LoginSession(SQLModel, table=True):
     """One signed-in device (a browser that logged in on the login page).
 

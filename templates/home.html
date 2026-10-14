@@ -1,16 +1,101 @@
 {% extends "base.html" %}
+{% import "partials/icons.html" as icon %}
 
 {% block title %}Ren{% endblock %}
 
+{# The tree page's forms and settings send the security (CSRF) token. #}
+{% block body_attrs %}{% if mode == "tree" %}hx-headers='{"X-CSRF-Token": "{{ csrf_token() }}"}'{% endif %}{% endblock %}
+
+{# Two pages share this template.
+   - The front page (/): "Ren" with its base on the screen's centre line, with
+     Login and "as guest?" below it. (Login goes straight into the tree if
+     you're already signed in.)
+   - The tree (/tree), like a "tech tree": the root tech (Ren or Guest) on the
+     left, joined by dashed lines to the places you can go. Each card in the
+     tree is a "tech". Right after signing in (?entered), the page starts as
+     the front page and the Login button glides into the root's place while
+     the tree builds itself (static/home.js). #}
+
 {% block content %}
-<div class="hero min-h-screen">
-  <div class="hero-content text-center px-6">
-    <div class="max-w-xl">
-      <div class="badge badge-primary badge-soft mb-6">Under construction</div>
-      <h1 class="text-5xl sm:text-6xl font-extrabold tracking-tight">Ren</h1>
-      <p class="py-6 text-lg text-base-content/70">Portfolio coming soon.</p>
-      <a href="/dashboard" class="btn btn-primary btn-wide">Open agent dashboard</a>
-    </div>
+<main class="home-stage" {% if entered %}data-entered{% endif %}>
+  {% if mode == "front" or entered %}
+  <h1 id="home-name" class="home-name text-5xl sm:text-6xl font-extrabold tracking-tight">Ren</h1>
+  <div class="home-actions">
+    {% if mode == "front" %}
+    <a href="/login?next=%2Ftree%3Fentered" class="login-button btn btn-primary btn-wide">Login</a>
+    {# Signing in as a guest creates a session, so it's a small form (POST),
+       styled as plain clickable text rather than a button. With a mouse it
+       slides out from under the Login button on hover (see "guest-link" in
+       theme.css); on phones and tablets it's always shown. #}
+    <form method="post" action="/login/guest" class="guest-form pt-4">
+      <button type="submit" class="guest-link cursor-pointer text-lg text-base-content/70 underline-offset-4 hover:underline">as guest?</button>
+    </form>
+    {% else %}
+    {# Just signed in: the Login button, about to glide into the tree. #}
+    <span id="login-ghost" class="btn btn-primary btn-wide" aria-hidden="true">Login</span>
+    {% endif %}
   </div>
-</div>
+  {% endif %}
+
+  {% if mode == "tree" %}
+  {# Just signed in, the tree starts hidden and home.js builds it up. #}
+  <section id="tree" class="tree{% if entered %} is-building{% endif %}" aria-label="Where to go">
+    {# The dashed lines are drawn by static/home.js, once the techs are in place. #}
+    <svg class="tree-lines" aria-hidden="true"></svg>
+    <div class="tree-root-column">
+      {# The root tech: who's signed in. Hover it (hold it, on a phone) and it
+         reads "Log out / Hold to sign out". A click goes back to the front page
+         (still signed in); holding it rewrites "Log out" into "Sign out",
+         letter by letter, then signs this device out. As Ren, its badge turns
+         into a cog on hover (hold, on a phone); clicking the cog switches
+         developer mode on or off. (All in static/home.js.) #}
+      <div id="tree-root" class="tree-card tree-root{% if owner %} tree-root-owner{% endif %}">
+        {% if owner %}
+        <button type="button" class="tree-badge root-badge" aria-pressed="false"
+                aria-label="Developer mode" title="Developer mode">
+          <span class="badge-icon icon-person">{{ icon.person() }}</span>
+          <span class="badge-icon icon-cog">{{ icon.cog() }}</span>
+        </button>
+        {% else %}
+        <span class="tree-badge">{{ icon.person() }}</span>
+        {% endif %}
+        <a href="/" class="root-main" draggable="false"
+           aria-label="{{ root_label }} is signed in. Click to go to the front page; hold to sign out.">
+          <span class="root-face root-who">
+            <span class="tree-title">{{ root_label }}</span>
+            <span class="tree-status root-status">signed in</span>
+          </span>
+          <span class="root-face root-out" aria-hidden="true">
+            <span class="tree-title root-out-word">Log out</span>
+            <span class="tree-status">Hold to sign out</span>
+          </span>
+        </a>
+        <form method="post" action="/logout" class="root-signout" hidden>
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        </form>
+      </div>
+    </div>
+    <ul class="tree-leaves">
+      {% for tech in techs %}
+      {% include "partials/tech_leaf.html" %}
+      {% endfor %}
+    </ul>
+  </section>
+
+  {% if owner %}
+  {# Developer mode: a leaf tech's settings open here instead of its page. #}
+  <div id="tech-settings" class="modal" role="dialog" aria-modal="true" aria-label="Tech settings">
+    <div class="modal-box max-w-lg space-y-5">
+      <div id="tech-settings-body" class="space-y-5"></div>
+      <div class="modal-action mt-0">
+        <button type="button" class="btn" data-close-settings>Close</button>
+      </div>
+    </div>
+    <div class="modal-backdrop" data-close-settings></div>
+  </div>
+  {% endif %}
+  {% endif %}
+</main>
+<noscript><style>.tree.is-building * { opacity: 1 !important; } #home-name, .home-actions { display: none; }</style></noscript>
+<script src="{{ static_url('home.js') }}"></script>
 {% endblock %}

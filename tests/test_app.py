@@ -27,6 +27,7 @@ from db import (
     LoginSession,
     Output,
     OutputFile,
+    TechSetting,
     normalize_database_url,
     utc_now,
 )
@@ -142,7 +143,30 @@ def grid(client, **params):
 def test_home_page_is_public(client):
     response = client.get("/")
     assert response.status_code == 200
-    assert "Portfolio coming soon" in response.text
+    assert 'href="/login?next=%2Ftree%3Fentered"' in response.text and ">Login</a>" in response.text
+    assert 'id="tree"' not in response.text  # no tree until signed in
+    assert 'action="/login/guest"' in response.text and ">as guest?</button>" in response.text
+    assert "Under construction" not in response.text and "Portfolio coming soon" not in response.text
+
+
+def test_login_as_guest(client, session):
+    add_agent(client, session)
+    response = client.post("/login/guest", follow_redirects=False)
+    assert response.status_code == 303 and response.headers["location"] == "/tree?entered"  # the tree
+    assert "HttpOnly" in response.headers["set-cookie"]
+    token = response.cookies[SESSION_COOKIE]
+    client.cookies.clear()
+    page = client.get("/dashboard", headers={"Cookie": f"{SESSION_COOKIE}={token}"})
+    assert page.status_code == 200 and "signed in as guest" in page.text
+    assert ">Log out</button>" not in page.text  # no log out on the dashboard any more
+    # For now guests have full access, e.g. Start an agent...
+    started = client.post("/dashboard/agents/1/command", data={"command": "start"},
+                          headers={"Cookie": f"{SESSION_COOKIE}={token}"})
+    assert started.status_code == 200
+    # ...but not what needs the agent editing password.
+    key = client.post("/dashboard/agents/1/key/view", data={"password": "a-guess"},
+                      headers={"Cookie": f"{SESSION_COOKIE}={token}"})
+    assert key_for("agent-1") not in key.text
 
 
 # --- Dashboard login -------------------------------------------------------
@@ -2297,7 +2321,7 @@ def test_private_pages_are_never_stored_by_browsers(client, session):
         assert client.get(path, auth=TEST_AUTH).headers["cache-control"] == "no-store"
         assert client.get(path).headers["cache-control"] == "no-store"  # the login refusal too
     assert client.get("/api/agents", headers=headers_for("agent-1")).headers["cache-control"] == "no-store"
-    assert "no-store" not in client.get("/").headers.get("cache-control", "")  # the public home page
+    assert client.get("/tree", auth=TEST_AUTH).headers["cache-control"] == "no-store"  # the tree is personal
 
 
 
@@ -2349,7 +2373,7 @@ def test_logging_out_ends_only_this_devices_sign_in(client):
     phone = sign_in(client).cookies[SESSION_COOKIE]
     client.cookies.clear()
     response = client.post("/logout", auth=TEST_AUTH, follow_redirects=False)
-    assert response.headers["location"] == "/login?signed_out=true"
+    assert response.headers["location"] == "/"  # back to the front page
     assert SESSION_COOKIE in response.headers["set-cookie"] and "Max-Age=0" in response.headers["set-cookie"]
     assert client.get("/dashboard", auth=TEST_AUTH).status_code == 401  # this device: out at once
     assert client.get("/dashboard", headers=as_device(phone)).status_code == 200  # the other: still in
@@ -2622,3 +2646,247 @@ def test_connector_download_inbox_streams_to_a_file(monkeypatch, fake_site, tmp_
     assert path.read_bytes() == b"payload" and fake_site["requests"][-1]["path"] == "/api/inbox/7/file"
     temp = connector.download_inbox({"id": 7, "filename": "../../etc/data.csv"})
     assert temp.name == "data.csv" and temp.read_bytes() == b"payload"  # never outside its temporary folder
+
+
+
+# --- The home page's tree of techs ---------------------------------------------
+
+
+def as_guest(client) -> dict:
+    """Sign in with "as guest?"; returns headers for requests as that guest."""
+    token = client.post("/login/guest", follow_redirects=False).cookies[SESSION_COOKIE]
+    client.cookies.clear()
+    return {"Cookie": f"{SESSION_COOKIE}={token}"}
+
+
+def test_signing_in_from_home_returns_to_the_tree(client):
+    response = client.post("/login", data={**TEST_LOGIN, "next": "/tree?entered"}, follow_redirects=False)
+    assert response.headers["location"] == "/tree?entered"
+    # Already signed in, Login goes straight into the tree's build.
+    again = client.get("/login?next=%2Ftree%3Fentered", auth=TEST_AUTH, follow_redirects=False)
+    assert again.headers["location"] == "/tree?entered"
+
+
+def test_front_page_shows_login_even_when_signed_in(client):
+    page = client.get("/", auth=TEST_AUTH).text
+    assert ">Login</a>" in page and 'id="tree"' not in page
+
+
+def test_tree_shows_the_techs(client):
+    page = client.get("/tree", auth=TEST_AUTH).text
+    assert 'class="tree"' in page  # finished, no build animation
+    assert 'id="home-name"' not in page and "login-ghost" not in page
+    assert ">Ren</span>" in page and ">signed in</span>" in page
+    assert 'href="/dashboard"' in page and "Portfolio" in page and "Data tracking" in page
+    # The root tech: a click goes to the front page; holding signs out (a hidden form).
+    assert 'href="/" class="root-main"' in page and ">Hold to sign out</span>" in page
+    assert 'action="/logout" class="root-signout" hidden' in page and f'value="{csrf_token()}"' in page
+    assert "Choose where to go" not in page
+    assert 'class="tree-badge root-badge"' in page and "icon-cog" in page  # Ren's developer-mode cog
+    assert 'id="tech-settings"' in page
+
+
+def test_tree_needs_signing_in(client):
+    response = client.get("/tree", follow_redirects=False)
+    assert response.status_code == 303 and response.headers["location"] == "/"
+
+
+def test_tree_builds_itself_right_after_signing_in(client):
+    page = client.get("/tree?entered", auth=TEST_AUTH).text
+    assert "data-entered" in page and "tree is-building" in page
+    assert 'id="home-name"' in page and 'id="login-ghost"' in page  # the Login button, about to move
+
+
+def test_guest_tree_root_says_guest(client):
+    page = client.get("/tree?entered", headers=as_guest(client)).text
+    assert ">Guest</span>" in page and ">Ren</span>" not in page
+    assert "root-badge" not in page and "icon-cog" not in page and "tech-settings" not in page  # no developer mode
+
+
+def test_signing_out_returns_to_the_front_page(client):
+    response = client.post("/logout", auth=TEST_AUTH, follow_redirects=False)
+    assert response.headers["location"] == "/"
+    assert client.get("/tree", auth=TEST_AUTH, follow_redirects=False).status_code == 303  # signed out
+
+
+def test_developer_settings_set_who_can_see_a_tech(client, session):
+    settings = client.get("/tree/techs/dashboard/settings", auth=TEST_AUTH).text
+    assert "Dashboard settings" in settings and 'type="range"' in settings and 'value="0"' in settings
+    assert "Page API key" not in settings  # the dashboard has one key per agent instead
+    response = client.post("/tree/techs/dashboard/visibility", data={"level": 1}, auth=TEST_AUTH)
+    assert 'value="1"' in response.text and "Private:" in response.text
+    assert 'id="tech-dashboard"' in response.text and 'hx-swap-oob="true"' in response.text  # the card updates too
+    assert session.get(TechSetting, "dashboard").visibility == "private"
+    assert client.post("/tree/techs/dashboard/visibility", data={"level": 3}, auth=TEST_AUTH).status_code == 422
+    assert client.get("/tree/techs/nope/settings", auth=TEST_AUTH).status_code == 404
+
+
+def test_guests_cannot_use_developer_settings(client):
+    guest = as_guest(client)
+    assert client.get("/tree/techs/dashboard/settings", headers=guest).status_code == 403
+    assert client.post("/tree/techs/dashboard/visibility", data={"level": 2}, headers=guest).status_code == 403
+
+
+def test_private_and_hidden_techs_for_guests(client, session):
+    guest = as_guest(client)
+    session.add(TechSetting(slug="dashboard", visibility="private"))
+    session.add(TechSetting(slug="portfolio", visibility="hidden"))
+    session.commit()
+    page = client.get("/tree", headers=guest).text
+    # Private: shown greyed out, can't be opened. Hidden: not there at all.
+    assert "Dashboard" in page and 'href="/dashboard"' not in page and ">private</span>" in page
+    assert "Portfolio" not in page
+    # You still see and open everything, with its setting in the corner.
+    mine = client.get("/tree", auth=TEST_AUTH).text
+    assert 'href="/dashboard"' in mine and ">private</span>" in mine and "Portfolio" in mine
+    # And the server keeps guests out of a private dashboard, whatever they type.
+    blocked = client.get("/dashboard", headers={**guest, "Accept": "text/html"}, follow_redirects=False)
+    assert blocked.status_code == 303 and blocked.headers["location"] == "/tree"
+    assert client.get("/dashboard/grid", headers=guest).status_code == 403
+    assert client.get("/dashboard", auth=TEST_AUTH).status_code == 200
+
+
+def test_page_wide_api_key_can_be_set_shown_and_randomized(client, session):
+    settings = client.get("/tree/techs/data-tracking/settings", auth=TEST_AUTH).text
+    assert "Page API key" in settings and "No key yet" in settings
+    randomized = client.post("/tree/techs/data-tracking/key", data={"new_key": ""}, auth=TEST_AUTH)
+    key = re.search(r"<code[^>]*>([0-9a-f]{64})</code>", randomized.text).group(1)
+    assert "New random key saved" in randomized.text and randomized.headers["cache-control"] == "no-store"
+    assert key not in session.get(TechSetting, "data-tracking").api_key_encrypted  # stored encrypted
+    assert "View key" in client.get("/tree/techs/data-tracking/settings", auth=TEST_AUTH).text
+    assert key in client.post("/tree/techs/data-tracking/key/show", auth=TEST_AUTH).text
+    typed = client.post("/tree/techs/data-tracking/key", data={"new_key": "my-own-page-key-0123456789"}, auth=TEST_AUTH)
+    assert "my-own-page-key-0123456789" in typed.text and "Key saved" in typed.text
+    short = client.post("/tree/techs/data-tracking/key", data={"new_key": "short"}, auth=TEST_AUTH)
+    assert "at least 20 characters" in short.text
+    assert client.post("/tree/techs/dashboard/key", data={"new_key": ""}, auth=TEST_AUTH).status_code == 404
+    assert client.post("/tree/techs/data-tracking/key/show", headers=as_guest(client)).status_code == 403
+
+
+def test_entered_does_nothing_when_signed_out(client):
+    response = client.get("/tree?entered", follow_redirects=False)
+    assert response.status_code == 303 and response.headers["location"] == "/"
+
+
+def test_tech_descriptions_can_be_edited(client, session):
+    response = client.post("/tree/techs/portfolio/description",
+                           data={"description": "  My   best projects.  "}, auth=TEST_AUTH)
+    assert "Description saved" in response.text and 'id="tech-portfolio"' in response.text  # card updates too
+    assert session.get(TechSetting, "portfolio").description == "My best projects."  # tidied
+    assert "My best projects." in client.get("/tree", auth=TEST_AUTH).text
+    too_long = client.post("/tree/techs/portfolio/description", data={"description": "x" * 121}, auth=TEST_AUTH)
+    assert "at most 120 characters" in too_long.text
+    session.expire_all()
+    assert session.get(TechSetting, "portfolio").description == "My best projects."  # unchanged
+    reset = client.post("/tree/techs/portfolio/description", data={"description": "  "}, auth=TEST_AUTH)
+    assert "Back to the original description" in reset.text
+    assert "Projects and write-ups. Coming soon." in client.get("/tree", auth=TEST_AUTH).text
+    assert client.post("/tree/techs/portfolio/description", data={"description": "hi"},
+                       headers=as_guest(client)).status_code == 403
+
+
+# --- One device, several accounts ------------------------------------------------
+
+
+def device_cookie(response, cookies: dict) -> dict:
+    """Keep a device's cookies up to date from a response (set or deleted)."""
+    for header in response.headers.get_list("set-cookie"):
+        name, _, rest = header.partition("=")
+        value = rest.split(";")[0]
+        if "Max-Age=0" in header or 'expires=Thu, 01 Jan 1970' in header:
+            cookies.pop(name, None)
+        else:
+            cookies[name] = value.strip('"')
+    return cookies
+
+
+def send(client, method, url, cookies, **kwargs):
+    client.cookies.clear()
+    header = "; ".join(f"{k}={v}" for k, v in cookies.items())
+    headers = {**kwargs.pop("headers", {}), **({"Cookie": header} if header else {})}
+    response = client.request(method, url, headers=headers, follow_redirects=False, **kwargs)
+    device_cookie(response, cookies)
+    return response
+
+
+def test_login_uses_the_highest_account_the_device_has(client):
+    device = {}
+    send(client, "POST", "/login", device, data={**TEST_LOGIN, "next": "/tree?entered"})  # signed in as Ren
+    send(client, "POST", "/login/guest", device)  # ...and then "as guest?"
+    assert ">Guest</span>" in send(client, "GET", "/tree", device).text  # the explicit choice: Guest
+    # Logging out (a click) keeps both; pressing Login then picks Ren, the higher account.
+    login = send(client, "GET", "/login?next=%2Ftree%3Fentered", device)
+    assert login.status_code == 303 and login.headers["location"] == "/tree?entered"
+    assert ">Ren</span>" in send(client, "GET", "/tree", device).text
+    # "as guest?" again reuses the same guest sign-in rather than starting another.
+    tokens_before = device["dashboard_session"].split(".")
+    send(client, "POST", "/login/guest", device)
+    assert sorted(device["dashboard_session"].split(".")) == sorted(tokens_before)
+    # Signing out (holding) ends every account on the device.
+    send(client, "POST", "/logout", device, headers={"X-CSRF-Token": csrf_token()})
+    assert send(client, "GET", "/tree", device).status_code == 303
+    assert send(client, "GET", "/login?next=%2Ftree%3Fentered", device).status_code == 200  # asks for the password
+
+
+def test_guest_only_device_logs_in_as_guest(client):
+    device = {}
+    send(client, "POST", "/login/guest", device)
+    login = send(client, "GET", "/login?next=%2Ftree%3Fentered", device)
+    assert login.status_code == 303  # straight in: Guest is the highest account it has
+    assert ">Guest</span>" in send(client, "GET", "/tree", device).text
+
+
+def test_techs_can_be_rearranged(client, session):
+    new_order = ["data-tracking", "dashboard", "portfolio"]
+    response = client.post("/tree/techs/order", data={"order": new_order}, auth=TEST_AUTH)
+    assert response.status_code == 204
+    page = client.get("/tree", auth=TEST_AUTH).text
+    positions = [page.index(f'id="tech-{slug}"') for slug in new_order]
+    assert positions == sorted(positions)  # shown top to bottom in the new order
+    # Guests see the same order (minus anything hidden from them).
+    hidden = session.get(TechSetting, "data-tracking")
+    hidden.visibility = "hidden"
+    session.add(hidden)
+    session.commit()
+    guest_page = client.get("/tree", headers=as_guest(client)).text
+    assert guest_page.index('id="tech-dashboard"') < guest_page.index('id="tech-portfolio"')
+    assert 'id="tech-data-tracking"' not in guest_page
+    # Every tech, once each; owner only.
+    assert client.post("/tree/techs/order", data={"order": ["dashboard"]}, auth=TEST_AUTH).status_code == 422
+    assert client.post("/tree/techs/order", data={"order": new_order + ["dashboard"]}, auth=TEST_AUTH).status_code == 422
+    assert client.post("/tree/techs/order", data={"order": new_order}, headers=as_guest(client)).status_code == 403
+
+
+# --- Lighter pages: everything from this site, cached for good -----------------
+
+
+def test_pages_load_nothing_from_other_servers(client):
+    for page in (client.get("/").text, client.get("/tree", auth=TEST_AUTH).text,
+                 client.get("/dashboard", auth=TEST_AUTH).text):
+        assert "cdn.jsdelivr.net" not in page and "fonts.googleapis.com" not in page
+        assert re.search(r'src="/static/vendor/htmx-[\d.]+\.min\.js\?v=[0-9a-f]+"', page)
+        assert re.search(r'src="/static/vendor/alpine-[\d.]+\.min\.js\?v=[0-9a-f]+"', page)
+    css = client.get("/static/theme.css").text
+    assert 'src: url("fonts/ibm-plex-mono-latin-400-normal.woff2")' in css
+    font = client.get("/static/fonts/ibm-plex-mono-latin-400-normal.woff2")
+    assert font.status_code == 200 and font.content[:4] == b"wOF2"
+    assert client.get("/static/fonts/OFL.txt").status_code == 200  # the font's licence travels with it
+
+
+def test_static_files_are_cached_for_good_only_when_versioned(client):
+    page = client.get("/").text
+    href = re.search(r'href="(/static/tailwind\.css\?v=[0-9a-f]+)"', page).group(1)
+    assert client.get(href).headers["cache-control"] == "public, max-age=31536000, immutable"
+    assert "immutable" in client.get("/static/fonts/ibm-plex-mono-latin-700-normal.woff2").headers["cache-control"]
+    # Without a fingerprint, the browser keeps checking (it might change).
+    assert "immutable" not in client.get("/static/theme.css").headers.get("cache-control", "")
+
+
+def test_daisyui_is_built_in_not_loaded_whole(client):
+    page = client.get("/dashboard", auth=TEST_AUTH).text
+    assert "npm/daisyui" not in page  # not the whole library from the CDN
+    href = re.search(r'href="(/static/tailwind\.css\?v=[0-9a-f]+)"', page).group(1)
+    css = client.get(href).text
+    for selector in (".btn", ".card", ".modal", ".badge", ".alert-success", ".alert-warning", ".toast"):
+        assert selector in css
+    assert len(css) < 300_000  # the whole of daisyUI is over 1 MB

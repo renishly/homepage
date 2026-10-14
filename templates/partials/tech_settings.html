@@ -1,0 +1,70 @@
+{# Developer mode: one tech's settings (inside the settings window on the tree
+   page). Who can see and open it, and, for pages with one, their page-wide API key. #}
+<h3 class="text-lg font-bold">{{ tech.title }} settings</h3>
+
+{% if error %}
+<div role="alert" class="alert alert-error alert-soft text-sm"><span>{{ error }}</span></div>
+{% elif notice %}
+<div role="status" class="alert alert-success alert-soft text-sm"><span>{{ notice }}</span></div>
+{% endif %}
+
+<section class="space-y-3">
+  <h4 class="font-semibold">Who can see it</h4>
+  {# A three-stop slider: drag it (or click a stop, or use the arrow keys). #}
+  <form hx-post="/tree/techs/{{ tech.slug }}/visibility" hx-trigger="change" hx-target="#tech-settings-body">
+    <input type="range" name="level" min="0" max="2" step="1" value="{{ level }}"
+           class="visibility-slider w-full" aria-label="Who can see {{ tech.title }}"
+           aria-valuetext="{{ visibility | capitalize }}">
+    <div class="visibility-stops" aria-hidden="true">
+      <span class="{{ 'is-current' if visibility == 'open' }}">Open</span>
+      <span class="{{ 'is-current' if visibility == 'private' }}">Private</span>
+      <span class="{{ 'is-current' if visibility == 'hidden' }}">Hidden</span>
+    </div>
+  </form>
+  <p class="text-sm text-base-content/70">
+    {% if visibility == "open" %}<strong>Open:</strong> guests can see it and open it.
+    {% elif visibility == "private" %}<strong>Private:</strong> guests see it greyed out (its text stays readable) but can't open it.
+    {% else %}<strong>Hidden:</strong> guests don't see it at all.{% endif %}
+    You can always open it yourself.
+  </p>
+</section>
+
+<section class="space-y-2">
+  <h4 class="font-semibold">Description</h4>
+  {# The counter is Alpine.js; the server checks the length too. #}
+  <form class="space-y-2" hx-post="/tree/techs/{{ tech.slug }}/description" hx-target="#tech-settings-body"
+        x-data="{ length: {{ description | length }} }">
+    <textarea name="description" rows="2" maxlength="{{ max_description }}" class="textarea w-full"
+              aria-label="{{ tech.title }} description" @input="length = $el.value.length">{{ description }}</textarea>
+    <div class="flex items-center justify-between gap-2">
+      <span class="text-xs text-base-content/60"><span x-text="length"></span> / {{ max_description }} &middot; empty restores the original</span>
+      <button type="submit" class="btn btn-sm btn-primary">Save description</button>
+    </div>
+  </form>
+</section>
+
+{% if tech.page_key %}
+<section class="space-y-2">
+  <h4 class="font-semibold">Page API key</h4>
+  <p class="text-xs text-base-content/60">One key for this whole page (unlike the dashboard, where each agent has its own).</p>
+  {% if shown_key %}
+  <div class="flex items-center gap-2">
+    <code class="block flex-1 select-all break-all p-2">{{ shown_key }}</code>
+  </div>
+  <p class="text-xs text-base-content/60">Copy it now if you need it; closing this window hides it again.</p>
+  {% elif has_key %}
+  <form hx-post="/tree/techs/{{ tech.slug }}/key/show" hx-target="#tech-settings-body">
+    <button type="submit" class="btn btn-sm">View key</button>
+  </form>
+  {% else %}
+  <p class="text-sm text-base-content/70">No key yet.</p>
+  {% endif %}
+  <form class="flex flex-wrap gap-2" hx-post="/tree/techs/{{ tech.slug }}/key" hx-target="#tech-settings-body"
+        hx-confirm="{{ 'Replace the current key? Anything using it stops working until updated.' if has_key else '' }}">
+    <input type="text" name="new_key" autocomplete="off" spellcheck="false"
+           placeholder="Type a key, or leave blank for a random one" class="input input-sm flex-1 min-w-48 font-mono"
+           aria-label="New page key (at least {{ min_key }} characters)">
+    <button type="submit" class="btn btn-sm btn-primary">{{ "Set key" if not has_key else "Replace key" }}</button>
+  </form>
+</section>
+{% endif %}

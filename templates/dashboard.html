@@ -39,14 +39,7 @@
             {{ current_folder.name if current_folder else "All Agents" }}
           </h1>
         </div>
-        <div class="flex flex-wrap gap-2">
-          <a href="/" class="btn btn-ghost btn-sm">&larr; Home</a>
-          {# Signs this device out. (Every device: see the (i) window.) #}
-          <form method="post" action="/logout">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <button type="submit" class="btn btn-ghost btn-sm">Log out</button>
-          </form>
-        </div>
+        <a href="/tree" class="btn btn-ghost btn-sm">&larr; Home</a>
       </header>
 
       {% if error %}

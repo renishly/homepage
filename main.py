@@ -34,16 +34,22 @@ from db import (
     InboxItem,
     Output,
     OutputFile,
+    TechSetting,
     create_db_and_tables,
     get_session,
     utc_now,
 )
 from security import (
+    ACTIVE_COOKIE,
+    GUEST_NAME,
     SESSION_COOKIE,
     SESSION_LIFETIME,
     KeyEncryptionNotConfigured,
     cookie_is_secure,
     csrf_token,
+    current_login,
+    device_logins,
+    end_device_logins,
     decrypt_api_key,
     edit_password_matches,
     encrypt_api_key,
@@ -54,6 +60,7 @@ from security import (
     login_details_match,
     require_agent,
     require_csrf,
+    require_owner,
     require_user,
     start_login,
 )
@@ -113,10 +120,20 @@ async def never_store_private_pages(request: Request, call_next):
     dashboard page or an API reply. Otherwise a restored tab or the Back
     button could show a private page without asking the server, and so
     without the login. Replies that set their own caching keep it (agents'
-    files never change, so those may stay in your own browser's cache)."""
+    files never change, so those may stay in your own browser's cache).
+    The opposite for the site's own files with fingerprinted or versioned
+    addresses: browsers may keep those for good (see below)."""
     response = await call_next(request)
-    if request.url.path.startswith(("/dashboard", "/api", "/login", "/logout")):
+    path = request.url.path
+    if path.startswith(("/dashboard", "/api", "/login", "/logout")):
         response.headers.setdefault("Cache-Control", "no-store")
+    elif path.startswith("/static/") and response.status_code in (200, 304) and (
+        "v" in request.query_params or path.startswith(("/static/fonts/", "/static/vendor/"))
+    ):
+        # Fingerprinted addresses (?v=...) and versioned files never change:
+        # a new version gets a new address. So browsers may keep them for a
+        # year without asking again, which saves a round trip per file per page.
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
     return response
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 templates = Jinja2Templates(directory=BASE_DIR / "templates")
@@ -125,9 +142,20 @@ templates.env.globals["csrf_token"] = csrf_token
 # Lets templates write {{ static_url("theme.css") }}: the file's address plus a
 # fingerprint of its contents, so browsers fetch it again whenever it changes
 # (instead of using an old copy they kept) but never otherwise.
-templates.env.globals["static_url"] = lambda name: (
-    f"/static/{name}?v={hashlib.sha256((BASE_DIR / 'static' / name).read_bytes()).hexdigest()[:10]}"
-)
+_fingerprints: dict[tuple[str, int], str] = {}
+
+
+def static_url(name: str) -> str:
+    """A static file's address with a fingerprint of its contents, worked out
+    once per version of the file (not on every page)."""
+    path = BASE_DIR / "static" / name
+    key = (name, path.stat().st_mtime_ns)
+    if key not in _fingerprints:
+        _fingerprints[key] = hashlib.sha256(path.read_bytes()).hexdigest()[:10]
+    return f"/static/{name}?v={_fingerprints[key]}"
+
+
+templates.env.globals["static_url"] = static_url
 # Lets templates write {{ agent | check_in_text }}, e.g. "every 5 min".
 templates.env.filters["check_in_text"] = lambda agent: "every " + human_interval(check_in_interval(agent))
 
@@ -879,9 +907,256 @@ def render_inbox_list(session: Session, agent: Agent, error: str | None = None, 
 # ---------------------------------------------------------------------------
 
 
+# After signing in (or "as guest?"), the tree is opened with ?entered, which
+# plays the Login button's move into the tree (see static/home.js).
+HOME_AFTER_SIGN_IN = "/tree?entered"
+
+# The "techs": the cards in the tree, after the "tech tree" it's styled on.
+# href is None for pages that aren't built yet. page_key: the page has one
+# API key for the whole page (set in developer mode), unlike the dashboard,
+# where each agent has its own.
+TECHS = [
+    {"slug": "dashboard", "title": "Dashboard", "href": "/dashboard", "icon": "grid",
+     "text": "Your agents, their outputs and controls.", "page_key": False},
+    {"slug": "portfolio", "title": "Portfolio", "href": None, "icon": "briefcase",
+     "text": "Projects and write-ups. Coming soon.", "page_key": False},
+    {"slug": "data-tracking", "title": "Data tracking", "href": None, "icon": "chart",
+     "text": "Charts of what your agents collect. Coming soon.", "page_key": True},
+]
+TECHS_BY_SLUG = {tech["slug"]: tech for tech in TECHS}
+VISIBILITIES = ["open", "private", "hidden"]  # the three stops of the developer-mode slider
+MAX_TECH_DESCRIPTION = 120  # characters: keeps the techs tidy
+
+
+def tech_view(session: Session, tech: dict, user: str) -> dict | None:
+    """How one tech looks to this viewer, or None if they don't get to see it.
+
+    You see every tech, with its setting in the corner (or "soon" if its page
+    isn't built yet). Guests don't see hidden techs, and see private ones
+    greyed out, unable to open them.
+    """
+    setting = session.get(TechSetting, tech["slug"])
+    visibility = setting.visibility if setting else "open"
+    text = (setting.description if setting else None) or tech["text"]
+    guest = user == GUEST_NAME
+    if guest and visibility == "hidden":
+        return None
+    can_open = tech["href"] is not None and not (guest and visibility == "private")
+    if tech["href"] is None:
+        status = "soon"
+    elif guest:
+        status = "private" if visibility == "private" else "open"
+    else:
+        status = visibility
+    return {**tech, "text": text, "visibility": visibility, "can_open": can_open, "status": status}
+
+
+def ordered_techs(session: Session) -> list[dict]:
+    """The techs in the order you've dragged them into (developer mode);
+    ones never moved keep their place from TECHS."""
+    positions = {setting.slug: setting.position for setting in session.exec(select(TechSetting))}
+
+    def place(item):
+        index, tech = item
+        position = positions.get(tech["slug"])
+        return (position if position is not None else index, index)
+
+    return [tech for _, tech in sorted(enumerate(TECHS), key=place)]
+
+
+def signed_in_user(request: Request, session: Session) -> str | None:
+    """Who's using this device right now (see current_login in security.py), or None."""
+    login = current_login(session, request)
+    return login.username if login else None
+
+
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
-    return templates.TemplateResponse(request, "home.html")
+    """The front page: the name, the Login button and "as guest?". (Signed in
+    or not: clicking Login when you're already signed in goes straight into
+    the tree.)"""
+    return templates.TemplateResponse(request, "home.html", {"mode": "front"})
+
+
+@app.get("/tree", response_class=HTMLResponse)
+def tree(request: Request, entered: str | None = None, session: Session = Depends(get_session)):
+    """The tree of techs, with Ren (or Guest) as its root. ?entered plays the
+    Login button's move into it, right after signing in."""
+    user = signed_in_user(request, session)
+    if user is None:
+        return RedirectResponse("/", status_code=303)
+    views = [view for tech in ordered_techs(session) if (view := tech_view(session, tech, user))]
+    response = templates.TemplateResponse(request, "home.html", {
+        "mode": "tree",
+        "owner": user != GUEST_NAME,
+        "root_label": "Guest" if user == GUEST_NAME else "Ren",
+        "techs": views,
+        "entered": entered is not None,
+    })
+    # This page is personal (and carries the forms' security token).
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+# ---------------------------------------------------------------------------
+# Developer mode: each tech's settings (you only, never guests)
+# ---------------------------------------------------------------------------
+
+
+def get_tech_or_404(slug: str) -> dict:
+    tech = TECHS_BY_SLUG.get(slug)
+    if tech is None:
+        raise HTTPException(status_code=404, detail="No such tech")
+    return tech
+
+
+def tech_settings_html(
+    session: Session,
+    tech: dict,
+    shown_key: str | None = None,
+    error: str | None = None,
+    notice: str | None = None,
+    with_leaf: bool = False,
+) -> HTMLResponse:
+    """The settings window's contents for one tech. with_leaf: also send its
+    card in the tree (out of band), so a new setting shows there straight away."""
+    setting = session.get(TechSetting, tech["slug"])
+    visibility = setting.visibility if setting else "open"
+    html_text = render_partial("partials/tech_settings.html", {
+        "tech": tech,
+        "level": VISIBILITIES.index(visibility),
+        "visibility": visibility,
+        "has_key": bool(setting and setting.api_key_encrypted),
+        "shown_key": shown_key,
+        "error": error,
+        "notice": notice,
+        "min_key": MIN_API_KEY_LENGTH,
+        "description": (setting.description if setting else None) or tech["text"],
+        "max_description": MAX_TECH_DESCRIPTION,
+    })
+    if with_leaf:
+        view = tech_view(session, tech, user="owner")
+        html_text += templates.get_template("partials/tech_leaf.html").render(tech=view, oob=True)
+    return HTMLResponse(html_text)
+
+
+def tech_setting(session: Session, slug: str) -> TechSetting:
+    return session.get(TechSetting, slug) or TechSetting(slug=slug)
+
+
+@app.post("/tree/techs/order", dependencies=[Depends(require_csrf)])
+def set_tech_order(
+    order: list[str] = Form(...),
+    session: Session = Depends(get_session),
+    owner: str = Depends(require_owner),
+):
+    """Save the leaf techs' order after one is dragged in developer mode.
+
+    `order` lists every tech's slug, top first (hidden ones included).
+    """
+    if sorted(order) != sorted(TECHS_BY_SLUG):
+        raise HTTPException(422, "order must list every tech exactly once")
+    for position, slug in enumerate(order):
+        setting = tech_setting(session, slug)
+        setting.position = position
+        session.add(setting)
+    session.commit()
+    return Response(status_code=204)
+
+
+@app.get("/tree/techs/{slug}/settings", response_class=HTMLResponse)
+def tech_settings(slug: str, session: Session = Depends(get_session), owner: str = Depends(require_owner)):
+    return tech_settings_html(session, get_tech_or_404(slug))
+
+
+@app.post("/tree/techs/{slug}/visibility", response_class=HTMLResponse, dependencies=[Depends(require_csrf)])
+def set_tech_visibility(
+    slug: str,
+    level: int = Form(...),
+    session: Session = Depends(get_session),
+    owner: str = Depends(require_owner),
+):
+    """The slider: 0 = Open, 1 = Private, 2 = Hidden."""
+    tech = get_tech_or_404(slug)
+    if level not in range(len(VISIBILITIES)):
+        raise HTTPException(422, "level must be 0 (open), 1 (private) or 2 (hidden)")
+    setting = tech_setting(session, slug)
+    setting.visibility = VISIBILITIES[level]
+    session.add(setting)
+    session.commit()
+    return tech_settings_html(session, tech, with_leaf=True)
+
+
+@app.post("/tree/techs/{slug}/description", response_class=HTMLResponse, dependencies=[Depends(require_csrf)])
+def set_tech_description(
+    slug: str,
+    description: str = Form(""),
+    session: Session = Depends(get_session),
+    owner: str = Depends(require_owner),
+):
+    """Your own description for a tech (blank: back to the one it came with)."""
+    tech = get_tech_or_404(slug)
+    text = " ".join(description.split())  # one tidy line; the card wraps it
+    if len(text) > MAX_TECH_DESCRIPTION:
+        return tech_settings_html(
+            session, tech, error=f"The description can be at most {MAX_TECH_DESCRIPTION} characters."
+        )
+    setting = tech_setting(session, slug)
+    setting.description = text or None
+    session.add(setting)
+    session.commit()
+    notice = "Description saved." if text else "Back to the original description."
+    return tech_settings_html(session, tech, notice=notice, with_leaf=True)
+
+
+def page_key_tech(slug: str) -> dict:
+    tech = get_tech_or_404(slug)
+    if not tech["page_key"]:
+        raise HTTPException(status_code=404, detail="This page has no page-wide API key")
+    return tech
+
+
+@app.post("/tree/techs/{slug}/key/show", response_class=HTMLResponse, dependencies=[Depends(require_csrf)])
+def show_tech_key(slug: str, session: Session = Depends(get_session), owner: str = Depends(require_owner)):
+    """Show the page's API key (until the window is closed)."""
+    tech = page_key_tech(slug)
+    setting = session.get(TechSetting, slug)
+    try:
+        key = decrypt_api_key(setting.api_key_encrypted) if setting and setting.api_key_encrypted else None
+    except KeyEncryptionNotConfigured:
+        return tech_settings_html(session, tech, error="KEY_ENCRYPTION_SECRET isn't set on the server.")
+    if key is None:
+        return tech_settings_html(session, tech, error="This key can't be shown (the encryption secret changed). Set a new one.")
+    response = tech_settings_html(session, tech, shown_key=key)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.post("/tree/techs/{slug}/key", response_class=HTMLResponse, dependencies=[Depends(require_csrf)])
+def set_tech_key(
+    slug: str,
+    new_key: str = Form(""),
+    session: Session = Depends(get_session),
+    owner: str = Depends(require_owner),
+):
+    """Set the page's API key: the one typed in, or a new random one if left blank."""
+    tech = page_key_tech(slug)
+    key = new_key.strip() or generate_api_key()
+    if len(key) < MIN_API_KEY_LENGTH or any(c.isspace() for c in key):
+        return tech_settings_html(
+            session, tech, error=f"The key must be at least {MIN_API_KEY_LENGTH} characters with no spaces."
+        )
+    setting = tech_setting(session, slug)
+    try:
+        setting.api_key_encrypted = encrypt_api_key(key)
+    except KeyEncryptionNotConfigured:
+        return tech_settings_html(session, tech, error="KEY_ENCRYPTION_SECRET isn't set on the server.")
+    session.add(setting)
+    session.commit()
+    response = tech_settings_html(session, tech, shown_key=key,
+                                  notice="New random key saved." if not new_key.strip() else "Key saved.")
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -890,7 +1165,9 @@ def home(request: Request):
 
 
 def safe_next(next_page: str | None) -> str:
-    """Where to go after signing in: only a dashboard page on this site."""
+    """Where to go after signing in: a dashboard page, or the tree."""
+    if next_page in (HOME_AFTER_SIGN_IN, "/tree"):
+        return next_page
     if next_page and next_page.startswith("/dashboard") and "//" not in next_page and "\\" not in next_page:
         return next_page
     return "/dashboard"
@@ -903,9 +1180,12 @@ def login_page(
     signed_out: bool = False,
     session: Session = Depends(get_session),
 ):
-    """The login form. Already signed in on this device? Straight to the dashboard."""
-    if find_login(session, request.cookies.get(SESSION_COOKIE)):
-        return RedirectResponse(safe_next(next), status_code=303)
+    """The login form. Already signed in on this device? Straight on, as the
+    highest-ranked account it's signed into (you, rather than Guest)."""
+    if current_login(session, request):
+        response = RedirectResponse(safe_next(next), status_code=303)
+        response.delete_cookie(ACTIVE_COOKIE, path="/")  # no longer "as guest": the highest account
+        return response
     return templates.TemplateResponse(
         request, "login.html", {"next": safe_next(next), "signed_out": signed_out, "error": None}
     )
@@ -928,17 +1208,59 @@ def login(
              "error": "Wrong username or password."},
             status_code=401,
         )
-    token = start_login(session, username, request.headers.get("user-agent"))
     response = RedirectResponse(safe_next(next), status_code=303)
+    sign_in_device(request, response, session, username, as_guest=False)
+    return response
+
+
+def sign_in_device(request: Request, response: Response, session: Session, username: str, as_guest: bool) -> None:
+    """Add a sign-in for this account to the device, keeping its other accounts.
+
+    Signing in with the password always starts a fresh sign-in (replacing any
+    older one for the same account); "as guest?" reuses the device's guest
+    sign-in if it still has one. as_guest: use Guest from now on (otherwise
+    the device uses its highest-ranked account).
+    """
+    kept = []
+    token = None
+    for old_token, login in device_logins(session, request):
+        if login.username != username:
+            kept.append(old_token)
+        elif as_guest and token is None:
+            token = old_token  # the guest sign-in this device already has
+        else:
+            end_login(session, old_token)  # replaced by the new sign-in below
+    if token is None:
+        token = start_login(session, username, request.headers.get("user-agent"))
     response.set_cookie(
         SESSION_COOKIE,
-        token,
+        ".".join(kept + [token]),
         max_age=int(SESSION_LIFETIME.total_seconds()),
         httponly=True,  # page scripts can't read it
         samesite="lax",  # other websites' requests don't carry it
         secure=cookie_is_secure(request),  # https only, except on this computer
         path="/",
     )
+    if as_guest:
+        response.set_cookie(ACTIVE_COOKIE, GUEST_NAME, max_age=int(SESSION_LIFETIME.total_seconds()),
+                            httponly=True, samesite="lax", secure=cookie_is_secure(request), path="/")
+    else:
+        response.delete_cookie(ACTIVE_COOKIE, path="/")
+
+
+
+@app.post("/login/guest")
+def login_as_guest(request: Request, session: Session = Depends(get_session)):
+    """"login as guest?" on the home page: sign this device in without a password.
+
+    For now guests can do everything you can, except what needs the agent
+    editing password (viewing or replacing keys, deleting agents). Like any
+    sign-in, it lasts a day and ends on Log out or when DASHBOARD_PASSWORD changes.
+    """
+    response = RedirectResponse(HOME_AFTER_SIGN_IN, status_code=303)  # the tree, as for Login
+    # The device keeps any other account it's signed into (e.g. yours), so a
+    # later Login uses that one again.
+    sign_in_device(request, response, session, GUEST_NAME, as_guest=True)
     return response
 
 
@@ -948,11 +1270,16 @@ def logout(
     everywhere: bool = Form(False),
     session: Session = Depends(get_session),
 ):
-    """Sign this device out (or every device, with "Sign out all devices")."""
-    end_login(session, request.cookies.get(SESSION_COOKIE), everywhere=everywhere)
-    response = RedirectResponse("/login?signed_out=true", status_code=303)
+    """Sign this device out of all its accounts (or every device, with
+    "Sign out all devices")."""
+    if everywhere:
+        end_login(session, None, everywhere=True)
+    else:
+        end_device_logins(session, request)
+    response = RedirectResponse("/", status_code=303)  # back to the front page
     response.delete_cookie(SESSION_COOKIE, path="/", httponly=True, samesite="lax",
                            secure=cookie_is_secure(request))
+    response.delete_cookie(ACTIVE_COOKIE, path="/")
     return response
 
 

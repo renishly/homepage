@@ -759,6 +759,58 @@ This was run when agents still identified themselves by `AGENT_NAME`.
   - the warning in the Inbox window was split into odd columns.
 - **Tests:** 12 new tests (upload in pieces, taking and deleting, privacy between agents, size limits, removing, login/CSRF/key, the page, agent deletion, and the connector's hand-over, keep-for-later and safe downloads); all 316 pass.
 
+## 3w. Home page: centred name, guest sign-in and the tree
+
+**Result: PASSED** (automated tests and the browser; the motion itself is best judged by eye).
+
+- **Signed out:** "Ren" sits in the exact centre of the screen (measured: the name's centre and the screen's centre were both at 512, 384), with **Login** below and "as guest?" (slides out from under Login on hover; always shown on phones).
+- **Signing in:** Login goes through the sign-in page and comes back to `/?entered`; "as guest?" signs in as `guest` and comes back the same way. There, the Login button glides to the root's place, the name fades, the root appears as **Ren** or **Guest**, the dashed lines draw out, and the leaves arrive one by one. The address then becomes plain `/`, so reloading shows the finished tree.
+- **The tree:** a root card on the left and three leaves (**Dashboard**, open; **Portfolio** and **Data tracking**, marked "soon"), styled after a tech tree in the codepaper look. Phones get a vertical tree. The root card has a "log out" link.
+- **Checked in the browser:** start and end states of the build, the finished tree on a wide screen and a phone, guest and owner roots. In the hidden test pane, animations only move while the pane is drawn, so the middle of the glide couldn't be captured; a page opened in a background tab likewise plays its build when first looked at.
+- **Fixed while testing:** the Login button had shrunk to its text's width after the layout change.
+- **Follow-up changes (user's requests):** the name's *base* is now on the screen's centre line (measured: 384 and 384); log out goes to the front page (from the tree and the dashboard); the root tech shows only "Ren"/"Guest" and "signed in", on one line, vertically centred; hovering it shows "Log out" and clicking it logs out (checked: it logged out and landed on the front page). As Ren, hovering the badge spins it into a cog, and clicking toggles developer mode ("developer mode" status, cog stays, remembered in the browser; checked on and off). Guests get no cog.
+- **Phones (simulated touch events):** holding the badge shows the cog and letting go hides it, without switching modes; a quick tap switches developer mode; a plain tap on the card does not log out; holding it shows "Log out"; the next tap logs out. All as intended.
+- **Tests:** 7 new or updated tests; all 322 pass.
+
+## 3x. Developer mode settings, and log out vs. sign out
+
+**Result: PASSED** (automated tests and the browser).
+
+- **Sign-in card** no longer says "Agent Dashboard"; the dashboard has no Log out button.
+- **Front page and tree:** the tree moved to `/tree`; `/` always shows the name and Login, and Login goes straight into the tree when already signed in.
+- **Root tech:** hover shows "Log out / Hold to sign out" on one line (the root was widened after it wrapped). A click went to the front page and stayed signed in (checked). Holding the mouse down rewrote the word letter by letter, then signed out, measured: Log out → Lo out (332 ms) → L out → " out" → S out → Si out → Sig out → Sign out (1,052 ms), then the device was signed out and on the front page. Letting go early restores "Log out"; on phones the first hold reveals it and holding on signs out.
+- **Developer mode** starts off on every visit to the tree. In it, a leaf tech opens its settings: a three-stop slider (Open / Private / Hidden), saved straight away and shown on the tech; Data tracking also has a page-wide API key to set, show or randomize (stored encrypted).
+- **Server-side rules:** only the owner can use the settings (guests get 403); guests see Private techs greyed out and can't open them, don't see Hidden ones, and are kept out of a Private/Hidden dashboard even by typing its address (redirected to the tree; partial requests get 403).
+- **Tests:** 10 new or rewritten tests; all 329 pass.
+
+## 3y. Tech descriptions, and several accounts per device
+
+**Result: PASSED** (automated tests and the browser).
+
+- **Descriptions:** in developer mode, each tech's settings have a description box (up to 120 characters, with a live counter; extra spaces tidied; empty restores the original). In the browser, a longer Portfolio description saved straight away, the tech grew from 76 to 105 px tall, and the lines re-joined. Too long is refused; guests can't change it.
+- **Several accounts:** a device can hold one sign-in per account. Checked: signed in as Ren, then "as guest?" showed Guest (the explicit choice); Login then went straight in as Ren (the highest account), without the password; "as guest?" again reused the same guest sign-in; holding sign-out ended both, and Login then asked for the password. A guest-only device goes in as Guest on Login.
+- **Also:** the slider lost a stray box it had inherited from text fields.
+- **Tests:** 3 new tests; all 332 pass.
+
+## 3z. Rearranging techs by dragging (developer mode)
+
+**Result: PASSED** (automated tests and the browser, with simulated pointer drags).
+
+- In developer mode, dragging a leaf tech moves it; the others slide aside and the lines follow live. On release the order is saved (`POST /tree/techs/order`, owner only, every tech exactly once) and shown to guests too (hidden techs left out).
+- **Checked in the browser:** dragging Data tracking from the bottom to the top: it had passed Portfolio halfway, settled at the top, and the server's order matched afterwards. The click a browser sends after a drag didn't open the settings; a plain click still did. The browser's own link dragging is blocked in developer mode so it can't cancel the drag.
+- **Not done:** rearranging from the keyboard.
+- **Tests:** 1 new test; all 333 pass.
+
+## 3aa. Lighter pages: daisyUI built in, everything from this site, cached for good
+
+**Result: PASSED** (automated tests and the browser).
+
+- **Measured first:** the live site took 52 s to wake from sleep (Render's free plan) and about 0.25 s per request afterwards (Tokyo to Oregon). Instructions for both were given to the user (an uptime monitor; moving the service and database to Singapore); those are theirs to do.
+- **daisyUI built in:** only the components the site uses are now built into `static/tailwind.css` (135 KB, about 20 KB to download), instead of the whole of daisyUI (1.1 MB) from the CDN. Every element's computed style on the front page, dashboard (with Add Agent open) and agent page (with settings, Filter and Inbox open) was compared before and after: the same, except invisible inputs, a timing artefact, and the phone Controls bar, whose 95% yellow background (always in its template) now actually works; its now-pointless blur was removed. The tree was checked by eye (its contents had changed in between).
+- **Everything from this site:** HTMX 2.0.11, Alpine.js 3.17.4 and the IBM Plex Mono font (4 weights, Latin and extended Latin, with its OFL licence) are served from `static/`. In the browser: no requests to other servers; the font, HTMX and Alpine all worked.
+- **Cached for good:** fingerprinted (`?v=...`) and versioned files are sent with `Cache-Control: public, max-age=31536000, immutable`, also on "not modified" answers (a first version missed those). On moving between pages, every file then came from the browser's cache without a request. Fingerprints are now worked out once per file version, not on every page.
+- **Tests:** 3 new tests; all 336 pass.
+
 ## 4. Known limitations and things not verified
 
 - **Render:** deployment was not tested. Only the user can do that, following the README. `render.yaml` parses as valid YAML and its field names were checked against Render's Blueprint reference, but Render itself has not validated it.

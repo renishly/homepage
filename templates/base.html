@@ -6,17 +6,15 @@
   <title>{% block title %}Homepage{% endblock %}</title>
   <meta name="theme-color" content="#ffff83">
 
-  <!-- IBM Plex Mono from Google Fonts: the "code" look, used for everything -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <!-- IBM Plex Mono, the "code" look used for everything, served by this site
+       (static/fonts/, declared in theme.css). The two weights used most are
+       fetched straight away, so text appears in the right font sooner. -->
+  <link rel="preload" href="/static/fonts/ibm-plex-mono-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/static/fonts/ibm-plex-mono-latin-700-normal.woff2" as="font" type="font/woff2" crossorigin>
 
-  <!-- daisyUI v5 (ready-made components like cards, buttons and alerts) -->
-  <link href="https://cdn.jsdelivr.net/npm/daisyui@5" rel="stylesheet" type="text/css">
-
-  <!-- Tailwind CSS: the styles for class names like "grid-cols-3" or "text-sm",
-       built ahead of time from the templates (see tailwind.input.css), so the
-       browser doesn't have to work them out on every page. -->
+  <!-- Tailwind CSS and daisyUI: the styles for class names like "grid-cols-3",
+       "btn" or "card", built ahead of time from the templates with only the
+       parts the site uses (see tailwind.input.css). -->
   <link href="{{ static_url('tailwind.css') }}" rel="stylesheet" type="text/css">
   <!-- The site's look: the "codepaper" colour theme, borders, shadows and animations.
        Loaded after daisyUI so it can adjust daisyUI's components. -->
@@ -24,10 +22,11 @@
   <!-- Hides elements marked x-cloak until Alpine.js has loaded (no flash of hidden forms). -->
   <style>[x-cloak] { display: none !important; }</style>
 
-  <!-- HTMX: lets HTML attributes like hx-post fetch and swap content from the server -->
-  <script src="https://cdn.jsdelivr.net/npm/htmx.org@2/dist/htmx.min.js"></script>
-  <!-- Alpine.js: small interactions (like hiding an alert) written as HTML attributes -->
-  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3/dist/cdn.min.js"></script>
+  <!-- HTMX 2.0.11: lets HTML attributes like hx-post fetch and swap content from the server.
+       Alpine.js 3.17.4: small interactions (like hiding an alert) written as HTML attributes.
+       Both are served by this site (static/vendor/), so pages don't wait on other servers. -->
+  <script src="{{ static_url('vendor/htmx-2.0.11.min.js') }}"></script>
+  <script defer src="{{ static_url('vendor/alpine-3.17.4.min.js') }}"></script>
 </head>
 {# Pages behind the login fill body_attrs with the CSRF token header, so every
    HTMX request from them carries it. The public home page leaves it empty. #}

@@ -1,16 +1,28 @@
-/* The source for static/tailwind.css, the site's Tailwind CSS utilities.
+/* The source for static/tailwind.css: the site's Tailwind CSS utilities and
+   daisyUI components (buttons, cards, pop-ups...).
 
-   Tailwind reads the templates (and main.py, which writes a little HTML)
-   for the class names they use, such as "grid-cols-3" or "text-sm", and
-   writes CSS for just those. Rebuild it after using a class name that isn't
+   Tailwind reads the templates, main.py (which writes a little HTML) and the
+   scripts in static/ for the class names they use, such as "grid-cols-3",
+   "btn" or "modal-open", and writes CSS for just those: a small fraction of
+   the whole of daisyUI. (The colours are the "codepaper" theme in theme.css.) Rebuild it after using a class name that isn't
    used anywhere yet (needs Node.js; see "Changing the styles" in the README):
 
-     npm install --no-save tailwindcss@4 @tailwindcss/cli@4
+     npm install --no-save tailwindcss@4 @tailwindcss/cli@4 daisyui@5
      npx tailwindcss -i tailwind.input.css -o static/tailwind.css --minify
 */
 @import "tailwindcss" source(none);
 @source "./templates";
 @source "./main.py";
+@source "./static/*.js";
+/* Class names main.py puts together from parts (alert_html: "alert-" + kind),
+   which Tailwind can't spot by reading. */
+@source inline("alert-success alert-warning alert-error alert-info");
+
+/* daisyUI's components. Its own light and dark themes stay as fallbacks,
+   exactly as when it was loaded whole from the CDN. */
+@plugin "daisyui" {
+  themes: light --default, dark --prefersdark;
+}
 
 @theme {
   /* IBM Plex Mono everywhere, falling back to the system's monospace font while it loads. */

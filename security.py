@@ -27,7 +27,7 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import APIKeyHeader
 from sqlmodel import Session, delete, select
 
-from db import Agent, LoginSession, get_session, utc_now
+from db import Agent, LoginSession, TechSetting, get_session, utc_now
 
 # auto_error=False lets us return our own 401 message when the header is missing.
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
@@ -64,6 +64,13 @@ def secret_matches(given: str | None, expected: str | None) -> bool:
 # deployed site (Secure).
 
 SESSION_COOKIE = "dashboard_session"
+GUEST_NAME = "guest"  # the name guests are signed in under ("as guest?")
+# A device can be signed into several accounts at once (for now: you and
+# Guest), one sign-in each; SESSION_COOKIE then holds their tokens, separated
+# by dots. Which one is in use: the highest-ranked (you, then Guest), unless
+# ACTIVE_COOKIE says "guest" because "as guest?" was chosen. It only picks
+# among sign-ins the device really holds, so it can't grant anything.
+ACTIVE_COOKIE = "dashboard_active"
 SESSION_LIFETIME = timedelta(days=1)
 LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
@@ -136,6 +143,42 @@ def end_login(db: Session, token: str | None, everywhere: bool = False) -> None:
     db.commit()
 
 
+def account_rank(username: str) -> int:
+    """Higher means more permissions: you (signed in with the password) over Guest."""
+    return 0 if username == GUEST_NAME else 1
+
+
+def device_logins(db: Session, request: Request) -> list[tuple[str, LoginSession]]:
+    """Every still-valid sign-in this device holds: (token, sign-in) pairs."""
+    tokens = [token for token in (request.cookies.get(SESSION_COOKIE) or "").split(".") if token]
+    pairs = []
+    for token in tokens:
+        login = find_login(db, token)
+        if login is not None:
+            pairs.append((token, login))
+    return pairs
+
+
+def current_login(db: Session, request: Request) -> LoginSession | None:
+    """The sign-in in use on this device: Guest if "as guest?" chose it,
+    otherwise the highest-ranked account the device is signed into."""
+    logins = [login for _, login in device_logins(db, request)]
+    if not logins:
+        return None
+    if request.cookies.get(ACTIVE_COOKIE) == GUEST_NAME:
+        for login in logins:
+            if login.username == GUEST_NAME:
+                return login
+    return max(logins, key=lambda login: account_rank(login.username))
+
+
+def end_device_logins(db: Session, request: Request) -> None:
+    """Sign this device out of every account it's signed into."""
+    for token in (request.cookies.get(SESSION_COOKIE) or "").split("."):
+        if token:
+            end_login(db, token)
+
+
 def cookie_is_secure(request: Request) -> bool:
     """Send the cookie over https only, except on this computer (http://localhost)."""
     return request.url.hostname not in LOCAL_HOSTS
@@ -162,12 +205,44 @@ def _not_signed_in(request: Request) -> HTTPException:
     return HTTPException(status.HTTP_401_UNAUTHORIZED, "Not signed in")
 
 
+def tech_visibility(db: Session, slug: str) -> str:
+    """"open", "private" or "hidden": who may open this tech (set in developer mode)."""
+    setting = db.get(TechSetting, slug)
+    return setting.visibility if setting else "open"
+
+
+def _guest_not_allowed(request: Request) -> HTTPException:
+    """A guest opening a page that's set to Private or Hidden: back to the tree."""
+    if request.headers.get("HX-Request"):
+        return HTTPException(status.HTTP_403_FORBIDDEN, "Not open to guests", headers={"HX-Redirect": "/tree"})
+    if "text/html" in request.headers.get("accept", ""):
+        return HTTPException(status.HTTP_303_SEE_OTHER, "Not open to guests", headers={"Location": "/tree"})
+    return HTTPException(status.HTTP_403_FORBIDDEN, "Not open to guests")
+
+
 def require_user(request: Request, db: Session = Depends(get_session)) -> str:
-    """Allow the request only from a browser that's signed in (see above)."""
-    login = find_login(db, request.cookies.get(SESSION_COOKIE))
+    """Allow the request only from a browser that's signed in (see above).
+
+    Guests are also kept out of the dashboard while its tech is set to Private
+    or Hidden in developer mode.
+    """
+    login = current_login(db, request)
     if login is None:
         raise _not_signed_in(request)
+    if (
+        login.username == GUEST_NAME
+        and request.url.path.startswith("/dashboard")
+        and tech_visibility(db, "dashboard") != "open"
+    ):
+        raise _guest_not_allowed(request)
     return login.username
+
+
+def require_owner(user: str = Depends(require_user)) -> str:
+    """Only you (signed in with the password), never a guest: for developer mode."""
+    if user == GUEST_NAME:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Only the owner can change this")
+    return user
 
 
 # ---------------------------------------------------------------------------

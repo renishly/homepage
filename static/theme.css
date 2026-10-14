@@ -53,6 +53,76 @@
   --noise: 0;
 }
 
+/* --- The font ---------------------------------------------------------------------
+
+   IBM Plex Mono (SIL Open Font License, see static/fonts/OFL.txt), served by
+   this site. Each weight comes in two parts, Latin and extended Latin (accented
+   letters); a browser only downloads a part when the page uses its letters. */
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/ibm-plex-mono-latin-ext-400-normal.woff2") format("woff2");
+  unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/ibm-plex-mono-latin-400-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("fonts/ibm-plex-mono-latin-ext-500-normal.woff2") format("woff2");
+  unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("fonts/ibm-plex-mono-latin-500-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("fonts/ibm-plex-mono-latin-ext-600-normal.woff2") format("woff2");
+  unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("fonts/ibm-plex-mono-latin-600-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("fonts/ibm-plex-mono-latin-ext-700-normal.woff2") format("woff2");
+  unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF;
+}
+@font-face {
+  font-family: "IBM Plex Mono";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("fonts/ibm-plex-mono-latin-700-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD;
+}
+
 /* --- Paper and type ---------------------------------------------------------- */
 
 /* The yellow paper is painted on the page's root (<html>), and the body itself
@@ -142,8 +212,7 @@ h2.card-title::before {
 }
 
 /* A blinking cursor after each page's main heading. */
-main h1::after,
-.hero h1::after {
+main h1::after {
   content: "_";
   margin-left: 0.08em;
   animation: cursor-blink 1.05s steps(1) infinite;
@@ -338,28 +407,475 @@ main > *:nth-child(3) { animation-delay: 0.12s; }
 main > *:nth-child(4) { animation-delay: 0.18s; }
 main > *:nth-child(5) { animation-delay: 0.24s; }
 
-/* The home page's name types itself out, then the rest fades in. */
-.hero h1 {
+/* --- Home page ------------------------------------------------------------------ */
+
+/* The stage: two equal halves of the screen. The name sits at the bottom of
+   the top half, so its base is on the screen's centre line; Login and
+   "as guest?" hang from the top of the bottom half. */
+.home-stage {
+  position: relative;
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: grid;
+  grid-template-rows: 1fr 1fr;
+  justify-items: center;
+  padding-inline: 1rem;
+}
+.home-stage > * {
+  animation: none; /* the home page has its own entrances, below */
+}
+/* The name types itself out... */
+.home-name {
+  grid-row: 1;
+  align-self: end;
+  margin: 0;
   animation: type-in-hero 0.9s steps(14, end) both;
-  /* Shrink to the name's own width (on its own line), so the page centres the
-     name itself... */
-  width: fit-content;
-  margin-inline: auto;
   position: relative;
   /* ...with letters 10% wider (stretched from the centre, so it stays centred). */
   transform: scaleX(1.1);
 }
 /* The blinking cursor sits just after the name but takes no space, so it
    doesn't count when centring. */
-.hero h1::after {
+.home-name::after {
   position: absolute;
   left: 100%;
   top: 0;
 }
-.hero p,
-.hero .btn,
-.hero .badge {
+/* ...then Login and "as guest?" rise in below it. */
+.home-actions {
+  grid-row: 2;
+  align-self: start;
+  width: min(16rem, 100%); /* room for the full-width ("wide") Login button */
+  margin-top: 2rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.home-actions > * {
   animation: rise-in 0.5s 0.75s cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+}
+/* Just signed in: the page carries straight on from before (no typing, no
+   rising): the Login button is about to glide into the tree. */
+.home-stage[data-entered] .home-name,
+.home-stage[data-entered] .home-actions > * {
+  animation: none;
+}
+
+/* The tree of places to go, styled after a "tech tree": cards with a round
+   badge on their left edge, joined by dashed lines (drawn by static/home.js).
+   Wide screens: the root on the left, the leaves in a column on the right.
+   Narrow screens: the root on top, the leaves below. */
+.tree {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7rem;
+  padding: 2rem 1.5rem 2rem 2.5rem;
+}
+.tree-lines {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+.tree-lines path {
+  fill: none;
+  stroke: var(--ink);
+  stroke-opacity: 0.6;
+  stroke-width: 2;
+  stroke-dasharray: 7 6;
+}
+.tree-lines path.tree-arrow {
+  stroke-dasharray: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.tree-root-column {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+}
+.tree-leaves {
+  position: relative;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+.tree-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 21rem;
+  max-width: calc(100vw - 5rem);
+  min-height: 4.75rem;
+  padding: 0.6rem 0.9rem 0.6rem 2.1rem;
+  background: #fff466;
+  color: var(--ink);
+  text-decoration: none;
+  border: 1.5px solid var(--ink);
+  box-shadow: 5px 5px 0 var(--ink);
+  transition: transform 0.12s ease, box-shadow 0.12s ease, background-color 0.12s ease;
+}
+.tree-root {
+  width: 17.5rem; /* room for "Log out" and "Hold to sign out" on one line */
+}
+.tree-root .tree-title,
+.tree-root .tree-status {
+  white-space: nowrap;
+}
+/* The round badge, half over the card's left edge. */
+.tree-badge {
+  position: absolute;
+  left: -1.45rem;
+  top: 50%;
+  translate: 0 -50%;
+  width: 2.9rem;
+  height: 2.9rem;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--vivid);
+  border: 1.5px solid var(--ink);
+  box-shadow: 0 0 0 3px #fff466, 0 0 0 4.5px var(--ink);
+}
+.tree-root .tree-badge {
+  background: var(--ink);
+  color: var(--paper);
+}
+.tree-card-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.tree-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding-bottom: 0.3rem;
+  border-bottom: 1px solid rgb(17 17 17 / 0.25);
+}
+.tree-title {
+  font-size: 0.9rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.tree-status {
+  font-size: 0.68rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  opacity: 0.7;
+}
+.tree-text {
+  font-size: 0.78rem;
+  line-height: 1.35;
+  opacity: 0.75;
+}
+/* Places you can go lift and light up; the ones not built yet are faded. */
+.tree-card-open:hover,
+.tree-card-open:focus-visible {
+  background: var(--vivid);
+  transform: translate(-2px, -2px);
+  box-shadow: 7px 7px 0 var(--ink);
+}
+.tree-card-open:hover .tree-badge {
+  box-shadow: 0 0 0 3px var(--vivid), 0 0 0 4.5px var(--ink);
+}
+.tree-card-locked {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.tree-card-locked .tree-badge {
+  background: #fffbd6;
+}
+@media (max-width: 767px) {
+  .tree {
+    flex-direction: column;
+    gap: 2.75rem;
+  }
+  .tree-leaves {
+    padding-left: 1.5rem;
+  }
+}
+/* The root tech: just who's signed in ("Ren" / "Guest", and "signed in"),
+   on one line in the middle of the card, left-aligned. Hovering it (or
+   holding it on a phone, which adds .is-holding) swaps its words for
+   "Log out / Hold to sign out": a click goes to the front page, and holding
+   rewrites "Log out" into "Sign out" and signs out (static/home.js). */
+.tree-root {
+  padding: 0;
+  -webkit-touch-callout: none; /* holding it shouldn't open the phone's menu */
+  user-select: none;
+  touch-action: manipulation;
+}
+.root-main {
+  flex: 1;
+  align-self: stretch;
+  display: grid;
+  text-decoration: none;
+  -webkit-user-drag: none;
+  align-items: center;
+  min-height: 4.75rem;
+  padding: 0.6rem 0.9rem 0.6rem 2.1rem;
+  text-align: left;
+  color: inherit;
+  font: inherit;
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+.root-face {
+  grid-area: 1 / 1;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+.root-out {
+  opacity: 0;
+  transform: translateY(6px);
+}
+.tree-root.is-holding .root-who {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+.tree-root.is-holding .root-out {
+  opacity: 1;
+  transform: none;
+}
+.tree-root.is-holding {
+  background: var(--vivid);
+}
+@media (hover: hover) {
+  .root-main:hover .root-who,
+  .root-main:focus-visible .root-who {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+  .root-main:hover .root-out,
+  .root-main:focus-visible .root-out {
+    opacity: 1;
+    transform: none;
+  }
+  .tree-root:has(.root-main:hover) {
+    background: var(--vivid);
+  }
+}
+/* The caret while "Log out" is rewritten into "Sign out". */
+.root-out-word.is-typing::after {
+  content: "▏";
+  margin-left: 0.05em;
+  animation: cursor-blink 0.6s steps(1) infinite;
+}
+
+/* Ren's badge: the person spins into a cog on hover (or while held on a
+   phone, .is-held), and back again. In developer mode (.is-dev) the cog stays. */
+.root-badge {
+  z-index: 1; /* above the log-out button */
+  cursor: pointer;
+  padding: 0;
+  font: inherit;
+  color: var(--paper);
+}
+.badge-icon {
+  grid-area: 1 / 1;
+  display: grid;
+  place-items: center;
+  transition:
+    transform 0.5s cubic-bezier(0.3, 1.3, 0.5, 1),
+    opacity 0.25s ease;
+}
+.icon-cog {
+  opacity: 0;
+  transform: rotate(-180deg) scale(0.5);
+}
+.root-badge.is-held .icon-cog,
+.tree-root.is-dev .icon-cog {
+  opacity: 1;
+  transform: none;
+}
+.root-badge.is-held .icon-person,
+.tree-root.is-dev .icon-person {
+  opacity: 0;
+  transform: rotate(180deg) scale(0.5);
+}
+@media (hover: hover) {
+  .root-badge:hover .icon-cog,
+  .root-badge:focus-visible .icon-cog {
+    opacity: 1;
+    transform: none;
+  }
+  .root-badge:hover .icon-person,
+  .root-badge:focus-visible .icon-person {
+    opacity: 0;
+    transform: rotate(180deg) scale(0.5);
+  }
+}
+/* Switching developer mode on or off gives the cog an extra full turn. */
+.root-badge.is-spinning .icon-cog {
+  animation: cog-spin 0.6s cubic-bezier(0.3, 0.9, 0.4, 1);
+}
+@keyframes cog-spin {
+  from { rotate: 0deg; }
+  to { rotate: 360deg; }
+}
+.tree-root.is-dev .root-badge {
+  background: var(--vivid);
+  color: var(--ink);
+}
+
+/* Techs set to Private or Hidden, as you see them (guests don't see hidden
+   ones at all): a dashed edge marks them. */
+.tech-private .tree-card,
+.tech-hidden .tree-card {
+  border-style: dashed;
+}
+.tech-hidden .tree-card {
+  opacity: 0.4;
+}
+/* Developer mode: every leaf tech opens its settings, so they all look clickable. */
+.tree.is-dev-mode .tree-leaf .tree-card {
+  cursor: pointer;
+  outline: 2px dashed var(--ink);
+  outline-offset: 5px;
+}
+.tree.is-dev-mode .tree-leaf .tree-card:hover {
+  background: var(--vivid);
+}
+/* ...and can be dragged up or down to rearrange them (static/home.js). */
+.tree.is-dev-mode .tree-leaf {
+  cursor: grab;
+  touch-action: none; /* a finger drags the tech rather than scrolling the page */
+}
+.tree.is-dev-mode .tree-leaf .tree-card {
+  cursor: inherit;
+}
+.tree.is-reordering {
+  cursor: grabbing;
+  user-select: none;
+}
+.tree-leaf.is-dragging {
+  position: relative;
+  z-index: 2;
+  cursor: grabbing;
+}
+.tree-leaf.is-dragging .tree-card {
+  background: var(--vivid);
+  box-shadow: 9px 9px 0 var(--ink);
+}
+
+/* The settings window's three-stop slider: Open, Private, Hidden. */
+.visibility-slider {
+  appearance: none;
+  height: 1.75rem;
+  background: transparent;
+  border: 0 !important; /* not the boxed look of text fields */
+  box-shadow: none !important;
+  cursor: grab;
+}
+.visibility-slider:active {
+  cursor: grabbing;
+}
+/* The track: a line with a dot under each of the three resting points (the
+   thumb is 1.5rem wide, so its centre rests 0.75rem in from either end). */
+.visibility-slider::-webkit-slider-runnable-track {
+  height: 0.75rem;
+  background:
+    radial-gradient(circle, var(--ink) 0.25rem, transparent 0.27rem) left 0.375rem center / 0.75rem 0.75rem no-repeat,
+    radial-gradient(circle, var(--ink) 0.25rem, transparent 0.27rem) center / 0.75rem 0.75rem no-repeat,
+    radial-gradient(circle, var(--ink) 0.25rem, transparent 0.27rem) right 0.375rem center / 0.75rem 0.75rem no-repeat,
+    linear-gradient(var(--ink), var(--ink)) center / 100% 2px no-repeat;
+}
+.visibility-slider::-moz-range-track {
+  height: 2px;
+  background: var(--ink);
+}
+.visibility-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 1.5rem;
+  height: 1.5rem;
+  margin-top: -0.375rem;
+  background: var(--vivid);
+  border: 2px solid var(--ink);
+  box-shadow: 3px 3px 0 var(--ink);
+}
+.visibility-slider::-moz-range-thumb {
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 0;
+  background: var(--vivid);
+  border: 2px solid var(--ink);
+  box-shadow: 3px 3px 0 var(--ink);
+}
+.visibility-stops {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 0.25rem;
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+.visibility-stops .is-current {
+  font-weight: 700;
+  opacity: 1;
+}
+
+/* While the tree builds itself after signing in (static/home.js), its parts
+   start hidden; the script brings them in one by one. */
+.tree.is-building {
+  pointer-events: none;
+}
+.tree.is-building .tree-root,
+.tree.is-building .tree-leaf,
+.tree.is-building .tree-lines {
+  opacity: 0;
+}
+
+/* "as guest?" under the home page's Login button. With a mouse (or trackpad)
+   it hides behind the button and slides down when the button is hovered or
+   focused with the keyboard, staying while the pointer moves onto it, and
+   leaving a moment after. Phones and tablets can't hover, so there it's
+   simply always shown. */
+@media (hover: hover) {
+  .login-button {
+    position: relative;
+    z-index: 1; /* the text slides out from behind it */
+  }
+  .guest-link {
+    display: inline-block;
+    opacity: 0;
+    transform: translateY(-2.25rem);
+    pointer-events: none;
+    transition:
+      opacity 0.2s ease 0.25s,
+      transform 0.25s ease 0.25s;
+  }
+  .login-button:hover + .guest-form .guest-link,
+  .login-button:focus-visible + .guest-form .guest-link,
+  .guest-form:hover .guest-link,
+  .guest-form:focus-within .guest-link {
+    opacity: 1;
+    transform: none;
+    pointer-events: auto;
+    transition:
+      opacity 0.2s ease,
+      transform 0.3s cubic-bezier(0.2, 0.9, 0.3, 1.25);
+  }
 }
 
 /* Pop-up windows snap open. */
